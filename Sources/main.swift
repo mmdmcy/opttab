@@ -99,15 +99,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openAccessibilitySettings() {
         promptForAccessibility()
         let urls = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
             "x-apple.systemsettings:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility",
-            "x-apple.systemsettings:com.apple.preference.security?Privacy_Accessibility",
         ]
         for string in urls {
-            if let url = URL(string: string) {
-                NSWorkspace.shared.open(url)
+            if let url = URL(string: string), NSWorkspace.shared.open(url) {
                 return
             }
         }
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app"))
     }
 
     @objc private func toggleLoginItem() {
