@@ -92,6 +92,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(relaunch)
         }
 
+        if Previews.isTrusted {
+            menu.addItem(NSMenuItem(title: "Screen Recording: on", action: nil, keyEquivalent: ""))
+        } else {
+            let grant = NSMenuItem(title: "Open Screen Recording Settings", action: #selector(openScreenSettings), keyEquivalent: "")
+            grant.target = self
+            menu.addItem(grant)
+        }
+
         menu.addItem(.separator())
 
         let login = NSMenuItem(title: "Launch at Login", action: #selector(toggleLoginItem), keyEquivalent: "")
@@ -125,6 +133,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func openAccessSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc func openScreenSettings() {
+        Previews.prepare()
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)
         }
     }

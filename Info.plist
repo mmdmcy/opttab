@@ -15,7 +15,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.3.0</string>
+	<string>1.6.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
@@ -30,6 +30,8 @@
 	<false/>
 	<key>NSAccessibilityUsageDescription</key>
 	<string>OptTab needs Accessibility so Option+Tab can list every window and focus the one you pick, including two windows from the same browser.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>OptTab uses Screen Recording only to show live thumbnails of your open windows in the switcher and taskbar picker.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

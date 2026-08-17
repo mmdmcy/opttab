@@ -24,6 +24,7 @@ xcrun swiftc \
     -framework AppKit \
     -framework ApplicationServices \
     -framework Carbon \
+    -framework ScreenCaptureKit \
     -framework ServiceManagement \
     -o "$macos/OptTab" \
     "$root"/Sources/*.swift

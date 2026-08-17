@@ -7,7 +7,9 @@ struct WindowEntry {
     let appName: String
     let title: String
     let icon: NSImage?
+    let bundleID: String
     let axWindow: AXUIElement?
+    let quartzBounds: CGRect
 }
 
 enum WindowCatalog {
@@ -68,7 +70,9 @@ enum WindowCatalog {
                     appName: app?.localizedName ?? owner,
                     title: pickTitle(axTitle: axTitle, cgTitle: cgTitle, appName: owner),
                     icon: app?.icon,
-                    axWindow: ax
+                    bundleID: app?.bundleIdentifier ?? "",
+                    axWindow: ax,
+                    quartzBounds: quartz.width > 8 ? quartz : quartzRect(fromCocoa: ax.flatMap(bounds(of:)) ?? .zero)
                 )
             )
         }
@@ -110,7 +114,7 @@ enum WindowCatalog {
                     pid: pid,
                     windowID: windowID,
                     owner: app.localizedName ?? "",
-                    quartz: bounds(of: ax) ?? .zero,
+                    quartz: quartzRect(fromCocoa: bounds(of: ax) ?? .zero),
                     cgTitle: title(of: ax) ?? "",
                     axHint: ax
                 )
@@ -121,33 +125,43 @@ enum WindowCatalog {
     }
 
     static func focus(_ entry: WindowEntry) {
-        let ax = entry.axWindow ?? axWindows(pid: entry.pid).first { PrivateCalls.cgWindowID(of: $0) == entry.windowID }
+        let ax = resolve(entry)
 
         if let ax {
             AXUIElementSetAttributeValue(ax, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
         }
 
-        if let app = NSRunningApplication(processIdentifier: entry.pid) {
-            if app.isHidden {
-                app.unhide()
-            }
-            AXUIElementSetAttributeValue(AXUIElementCreateApplication(entry.pid), kAXFrontmostAttribute as CFString, kCFBooleanTrue)
-            NSApp.yieldActivation(to: app)
-            app.activate()
+        if let app = NSRunningApplication(processIdentifier: entry.pid), app.isHidden {
+            app.unhide()
         }
 
-        PrivateCalls.setFront(pid: entry.pid, windowID: entry.windowID)
+        PrivateCalls.focusWindow(pid: entry.pid, windowID: entry.windowID)
         raise(ax, pid: entry.pid)
 
-        DispatchQueue.main.async {
-            PrivateCalls.setFront(pid: entry.pid, windowID: entry.windowID)
-            raise(ax, pid: entry.pid)
-            NSRunningApplication(processIdentifier: entry.pid)?.activate()
+        if let app = NSRunningApplication(processIdentifier: entry.pid) {
+            NSApp.yieldActivation(to: app)
+            _ = app.activate(from: NSRunningApplication.current)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            PrivateCalls.setFront(pid: entry.pid, windowID: entry.windowID)
-            raise(ax, pid: entry.pid)
+
+        PrivateCalls.focusWindow(pid: entry.pid, windowID: entry.windowID)
+        raise(ax, pid: entry.pid)
+        moveCursor(into: entry.quartzBounds)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
+            PrivateCalls.focusWindow(pid: entry.pid, windowID: entry.windowID)
+            raise(resolve(entry), pid: entry.pid)
+            moveCursor(into: entry.quartzBounds)
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            PrivateCalls.focusWindow(pid: entry.pid, windowID: entry.windowID)
+            raise(resolve(entry), pid: entry.pid)
+        }
+    }
+
+    private static func moveCursor(into quartz: CGRect) {
+        guard quartz.width > 40, quartz.height > 40 else { return }
+        CGWarpMouseCursorPosition(CGPoint(x: quartz.midX, y: quartz.midY))
+        CGAssociateMouseAndMouseCursorPosition(boolean_t(1))
     }
 
     static func toggle(_ entry: WindowEntry) {
@@ -159,22 +173,50 @@ enum WindowCatalog {
     }
 
     static func isFrontmost(_ entry: WindowEntry) -> Bool {
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == entry.pid else { return false }
-        return list().first?.windowID == entry.windowID
+        frontWindowID() == entry.windowID
+    }
+
+    static func frontWindowID() -> CGWindowID? {
+        let ourPID = ProcessInfo.processInfo.processIdentifier
+        guard let raw = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+        for info in raw {
+            let layer = (info[kCGWindowLayer as String] as? Int) ?? 0
+            guard layer == 0 else { continue }
+            guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != ourPID else { continue }
+            return info[kCGWindowNumber as String] as? CGWindowID
+        }
+        return nil
     }
 
     static func minimize(_ entry: WindowEntry) {
-        guard let ax = entry.axWindow else { return }
+        guard let ax = resolve(entry) else { return }
         AXUIElementSetAttributeValue(ax, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
     }
 
     static func close(_ entry: WindowEntry) {
-        guard let ax = entry.axWindow else { return }
+        guard let ax = resolve(entry) else { return }
         var buttonRef: CFTypeRef?
         if AXUIElementCopyAttributeValue(ax, kAXCloseButtonAttribute as CFString, &buttonRef) == .success,
            let button = buttonRef {
             AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
+            return
         }
+        AXUIElementPerformAction(ax, kAXRaiseAction as CFString)
+        buttonRef = nil
+        if AXUIElementCopyAttributeValue(ax, kAXCloseButtonAttribute as CFString, &buttonRef) == .success,
+           let button = buttonRef {
+            AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
+        }
+    }
+
+    private static func resolve(_ entry: WindowEntry) -> AXUIElement? {
+        let windows = axWindows(pid: entry.pid)
+        if let match = windows.first(where: { PrivateCalls.cgWindowID(of: $0) == entry.windowID }) {
+            return match
+        }
+        return matchAX(windows, windowID: entry.windowID, quartz: entry.quartzBounds) ?? entry.axWindow
     }
 
     private static func raise(_ ax: AXUIElement?, pid: pid_t) {
@@ -190,7 +232,7 @@ enum WindowCatalog {
 
     private static func axWindows(pid: pid_t) -> [AXUIElement] {
         let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(app, 0.08)
+        AXUIElementSetMessagingTimeout(app, 0.2)
         var ref: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &ref) == .success,
               let windows = ref as? [AXUIElement]
@@ -221,15 +263,29 @@ enum WindowCatalog {
     }
 
     private static func cocoaRect(fromQuartz rect: CGRect) -> CGRect {
-        let height = NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
-            ?? NSScreen.main?.frame.height
-            ?? rect.height
+        let height = primaryHeight()
         return CGRect(
             x: rect.origin.x,
             y: height - rect.origin.y - rect.height,
             width: rect.width,
             height: rect.height
         )
+    }
+
+    private static func quartzRect(fromCocoa rect: CGRect) -> CGRect {
+        let height = primaryHeight()
+        return CGRect(
+            x: rect.origin.x,
+            y: height - rect.origin.y - rect.height,
+            width: rect.width,
+            height: rect.height
+        )
+    }
+
+    private static func primaryHeight() -> CGFloat {
+        NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
+            ?? NSScreen.main?.frame.height
+            ?? 0
     }
 
     private static func bounds(of window: AXUIElement) -> CGRect? {

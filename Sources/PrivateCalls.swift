@@ -1,24 +1,51 @@
 import AppKit
 import ApplicationServices
+import Carbon
 import Darwin
 
 enum PrivateCalls {
+    private static let userGenerated: UInt32 = 0x200
+
     static func cgWindowID(of element: AXUIElement) -> CGWindowID? {
         guard let fn = axGetWindow else { return nil }
         var id: CGWindowID = 0
         return fn(element, &id) == .success && id != 0 ? id : nil
     }
 
-    static func setFront(pid: pid_t, windowID: CGWindowID) {
-        guard let setFront = slpsSetFront, let getPSN = getProcessForPID else { return }
-        let psn = UnsafeMutablePointer<UInt32>.allocate(capacity: 2)
-        psn.initialize(repeating: 0, count: 2)
-        defer {
-            psn.deinitialize(count: 2)
-            psn.deallocate()
+    static func focusWindow(pid: pid_t, windowID: CGWindowID) {
+        guard let getPSN = getProcessForPID, let setFront = slpsSetFront else { return }
+        var psn = ProcessSerialNumber(highLongOfPSN: 0, lowLongOfPSN: 0)
+        guard getPSN(pid, &psn) == 0 else { return }
+        _ = setFront(&psn, windowID, userGenerated)
+        makeKey(&psn, windowID)
+    }
+
+    private static func makeKey(_ psn: inout ProcessSerialNumber, _ windowID: CGWindowID) {
+        guard let post = slpsPost else { return }
+        var bytes = [UInt8](repeating: 0, count: 0xF8)
+        bytes[0x04] = 0xF8
+        bytes[0x3A] = 0x10
+        var id = windowID
+        withUnsafeBytes(of: &id) { raw in
+            for (offset, byte) in raw.enumerated() {
+                bytes[0x3C + offset] = byte
+            }
         }
-        guard getPSN(pid, UnsafeMutableRawPointer(psn)) == 0 else { return }
-        _ = setFront(UnsafeMutableRawPointer(psn), windowID, 1)
+        for i in 0x20..<0x30 {
+            bytes[i] = 0xFF
+        }
+        bytes[0x08] = 0x01
+        bytes.withUnsafeMutableBufferPointer { buffer in
+            if let ptr = buffer.baseAddress {
+                _ = post(&psn, ptr)
+            }
+        }
+        bytes[0x08] = 0x02
+        bytes.withUnsafeMutableBufferPointer { buffer in
+            if let ptr = buffer.baseAddress {
+                _ = post(&psn, ptr)
+            }
+        }
     }
 
     private static let axGetWindow: (@convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError)? = {
@@ -32,10 +59,10 @@ enum PrivateCalls {
         )
     }()
 
-    private static let getProcessForPID: (@convention(c) (pid_t, UnsafeMutableRawPointer) -> Int32)? = {
+    private static let getProcessForPID: (@convention(c) (pid_t, UnsafeMutablePointer<ProcessSerialNumber>) -> Int32)? = {
         symbol(
             "GetProcessForPID",
-            as: (@convention(c) (pid_t, UnsafeMutableRawPointer) -> Int32).self,
+            as: (@convention(c) (pid_t, UnsafeMutablePointer<ProcessSerialNumber>) -> Int32).self,
             in: [
                 "/System/Library/Frameworks/ApplicationServices.framework/Frameworks/HIServices.framework/HIServices",
                 "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices",
@@ -43,10 +70,18 @@ enum PrivateCalls {
         )
     }()
 
-    private static let slpsSetFront: (@convention(c) (UnsafeMutableRawPointer, CGWindowID, UInt32) -> Int32)? = {
+    private static let slpsSetFront: (@convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, CGWindowID, UInt32) -> Int32)? = {
         symbol(
             "_SLPSSetFrontProcessWithOptions",
-            as: (@convention(c) (UnsafeMutableRawPointer, CGWindowID, UInt32) -> Int32).self,
+            as: (@convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, CGWindowID, UInt32) -> Int32).self,
+            in: ["/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight"]
+        )
+    }()
+
+    private static let slpsPost: (@convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, UnsafeMutablePointer<UInt8>) -> Int32)? = {
+        symbol(
+            "SLPSPostEventRecordTo",
+            as: (@convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, UnsafeMutablePointer<UInt8>) -> Int32).self,
             in: ["/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight"]
         )
     }()

@@ -6,6 +6,9 @@ final class SwitcherHUD {
 
     private var panel: NSPanel?
     private var cards: [CardView] = []
+    private var clickMonitor: Any?
+    private var globalClickMonitor: Any?
+    private var lastPick: TimeInterval = 0
 
     @discardableResult
     func show(entries: [WindowEntry], selected: Int) -> Int {
@@ -21,10 +24,13 @@ final class SwitcherHUD {
         select(selected)
         panel.alphaValue = 1
         panel.orderFrontRegardless()
+        installClickMonitor()
+        loadPreviews(entries)
         return columns
     }
 
     func hide() {
+        removeClickMonitor()
         panel?.orderOut(nil)
     }
 
@@ -59,8 +65,10 @@ final class SwitcherHUD {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle, .stationary]
         panel.appearance = NSAppearance(named: .darkAqua)
         panel.animationBehavior = .utilityWindow
+        panel.ignoresMouseEvents = false
+        panel.acceptsMouseMovedEvents = true
 
-        let effect = NSVisualEffectView()
+        let effect = BackdropView()
         effect.material = .hudWindow
         effect.blendingMode = .behindWindow
         effect.state = .active
@@ -82,7 +90,7 @@ final class SwitcherHUD {
         content.addSubview(grid)
 
         for (index, entry) in entries.enumerated() {
-            let card = CardView(entry: entry, iconSize: metrics.iconSize)
+            let card = CardView(entry: entry, previewSize: metrics.previewSize)
             card.translatesAutoresizingMaskIntoConstraints = false
             card.onClick = { [weak self] in
                 self?.onChoose?(index)
@@ -128,6 +136,70 @@ final class SwitcherHUD {
             display: true
         )
     }
+
+    private func installClickMonitor() {
+        removeClickMonitor()
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            guard let self else { return event }
+            return self.pickCard() ? nil : event
+        }
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
+            _ = self?.pickCard()
+        }
+    }
+
+    private func removeClickMonitor() {
+        if let clickMonitor {
+            NSEvent.removeMonitor(clickMonitor)
+            self.clickMonitor = nil
+        }
+        if let globalClickMonitor {
+            NSEvent.removeMonitor(globalClickMonitor)
+            self.globalClickMonitor = nil
+        }
+    }
+
+    @discardableResult
+    private func pickCard() -> Bool {
+        guard let index = cardIndex(atScreen: NSEvent.mouseLocation) else { return false }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastPick < 0.18 { return true }
+        lastPick = now
+        onChoose?(index)
+        return true
+    }
+
+    private func cardIndex(atScreen screenPoint: NSPoint) -> Int? {
+        guard let panel, panel.isVisible, panel.frame.contains(screenPoint) else { return nil }
+        let windowPoint = panel.convertPoint(fromScreen: screenPoint)
+        for (index, card) in cards.enumerated() {
+            let point = card.convert(windowPoint, from: nil)
+            if card.bounds.contains(point) {
+                return index
+            }
+        }
+        return nil
+    }
+
+    private func loadPreviews(_ entries: [WindowEntry]) {
+        let ids = entries.map(\.windowID)
+        Previews.capture(ids, maxPixel: 420) { [weak self] images in
+            guard let self, self.cards.count == ids.count else { return }
+            for (index, id) in ids.enumerated() {
+                if let image = images[id] {
+                    self.cards[index].setPreview(image)
+                }
+            }
+        }
+    }
+}
+
+private final class BackdropView: NSVisualEffectView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) ?? self
+    }
 }
 
 private struct Metrics {
@@ -135,7 +207,7 @@ private struct Metrics {
     let rows: Int
     let cardWidth: CGFloat
     let cardHeight: CGFloat
-    let iconSize: CGFloat
+    let previewSize: CGSize
     let gap: CGFloat
     let inset: CGFloat
 
@@ -144,20 +216,19 @@ private struct Metrics {
         let columns = max(1, Int(ceil(sqrt(Double(count)))))
         let rows = max(1, Int(ceil(Double(count) / Double(columns))))
         let frame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
-        let gap: CGFloat = 8
+        let gap: CGFloat = 10
         let inset: CGFloat = 16
-        let banner: CGFloat = 0
-        let maxW = frame.width * 0.72
-        let maxH = frame.height * 0.64
-        let cardWidth = min(156, max(108, floor((maxW - inset * 2 - gap * CGFloat(columns - 1)) / CGFloat(columns))))
-        let cardHeight = min(128, max(92, floor((maxH - inset * 2 - banner - gap * CGFloat(rows - 1)) / CGFloat(rows))))
-        let iconSize: CGFloat = cardHeight >= 116 ? 52 : 40
+        let maxW = frame.width * 0.78
+        let maxH = frame.height * 0.66
+        let cardWidth = min(220, max(150, floor((maxW - inset * 2 - gap * CGFloat(columns - 1)) / CGFloat(columns))))
+        let cardHeight = min(168, max(118, floor((maxH - inset * 2 - gap * CGFloat(rows - 1)) / CGFloat(rows))))
+        let previewHeight = max(72, cardHeight - 44)
         return Metrics(
             columns: columns,
             rows: rows,
             cardWidth: cardWidth,
             cardHeight: cardHeight,
-            iconSize: iconSize,
+            previewSize: CGSize(width: cardWidth - 16, height: previewHeight),
             gap: gap,
             inset: inset
         )
@@ -169,16 +240,28 @@ private final class CardView: NSView {
     var selected = false {
         didSet { needsDisplay = true }
     }
+    private var hovered = false {
+        didSet { needsDisplay = true }
+    }
+    private let preview = NSImageView()
+    private let badge = NSImageView()
 
-    init(entry: WindowEntry, iconSize: CGFloat) {
+    init(entry: WindowEntry, previewSize: CGSize) {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 10
 
-        let iconView = NSImageView()
-        iconView.image = entry.icon
-        iconView.imageScaling = .scaleProportionallyDown
-        iconView.translatesAutoresizingMaskIntoConstraints = false
+        preview.wantsLayer = true
+        preview.layer?.cornerRadius = 7
+        preview.layer?.masksToBounds = true
+        preview.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
+        preview.image = entry.icon
+        preview.imageScaling = .scaleProportionallyDown
+        preview.translatesAutoresizingMaskIntoConstraints = false
+
+        badge.image = entry.icon
+        badge.imageScaling = .scaleProportionallyDown
+        badge.translatesAutoresizingMaskIntoConstraints = false
 
         let titleField = NSTextField(labelWithString: entry.title)
         titleField.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
@@ -186,50 +269,79 @@ private final class CardView: NSView {
         titleField.alignment = .center
         titleField.lineBreakMode = .byTruncatingTail
         titleField.drawsBackground = false
+        titleField.isSelectable = false
+        titleField.refusesFirstResponder = true
         titleField.translatesAutoresizingMaskIntoConstraints = false
 
-        let subtitle = entry.appName == entry.title ? "" : entry.appName
-        let subtitleField = NSTextField(labelWithString: subtitle)
-        subtitleField.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        subtitleField.textColor = NSColor.white.withAlphaComponent(0.55)
-        subtitleField.alignment = .center
-        subtitleField.lineBreakMode = .byTruncatingTail
-        subtitleField.drawsBackground = false
-        subtitleField.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(iconView)
+        addSubview(preview)
+        addSubview(badge)
         addSubview(titleField)
-        addSubview(subtitleField)
 
         NSLayoutConstraint.activate([
-            iconView.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: iconSize),
-            iconView.heightAnchor.constraint(equalToConstant: iconSize),
-            titleField.topAnchor.constraint(equalTo: iconView.bottomAnchor, constant: 8),
+            preview.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            preview.centerXAnchor.constraint(equalTo: centerXAnchor),
+            preview.widthAnchor.constraint(equalToConstant: previewSize.width),
+            preview.heightAnchor.constraint(equalToConstant: previewSize.height),
+            badge.leadingAnchor.constraint(equalTo: preview.leadingAnchor, constant: 6),
+            badge.bottomAnchor.constraint(equalTo: preview.bottomAnchor, constant: -6),
+            badge.widthAnchor.constraint(equalToConstant: 22),
+            badge.heightAnchor.constraint(equalToConstant: 22),
+            titleField.topAnchor.constraint(equalTo: preview.bottomAnchor, constant: 6),
             titleField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             titleField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            subtitleField.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 1),
-            subtitleField.leadingAnchor.constraint(equalTo: titleField.leadingAnchor),
-            subtitleField.trailingAnchor.constraint(equalTo: titleField.trailingAnchor),
+            titleField.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -6),
         ])
+
+        addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        ))
     }
 
     required init?(coder: NSCoder) { nil }
 
+    func setPreview(_ image: NSImage) {
+        preview.image = image
+        preview.imageScaling = .scaleProportionallyUpOrDown
+        if let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            preview.image = nil
+            preview.layer?.contents = cg
+            preview.layer?.contentsGravity = .resizeAspectFill
+        }
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        bounds.contains(point) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onClick?()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hovered = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovered = false
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         if selected {
-            NSColor.white.withAlphaComponent(0.14).setFill()
+            NSColor.white.withAlphaComponent(0.16).setFill()
             NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 10, yRadius: 10).fill()
             NSColor.white.withAlphaComponent(0.9).setStroke()
             let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 9, yRadius: 9)
             ring.lineWidth = 2
             ring.stroke()
+        } else if hovered {
+            NSColor.white.withAlphaComponent(0.08).setFill()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 10, yRadius: 10).fill()
         }
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        onClick?()
     }
 }
