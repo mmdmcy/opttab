@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import CoreGraphics
 
 @main
 enum OptTab {
@@ -21,26 +22,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Switcher.shared.prepare()
         setupStatusItem()
+        Hotkeys.shared.start()
         refreshTrust()
+        promptIfNeeded()
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
 
-        if AXIsProcessTrusted() {
-            EventTap.shared.start()
-        } else {
-            promptForAccessibility()
-            trustTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-                self?.refreshTrust()
-                if AXIsProcessTrusted() {
-                    self?.trustTimer?.invalidate()
-                    self?.trustTimer = nil
-                    EventTap.shared.start()
-                    self?.relaunch()
-                }
+        trustTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            self?.refreshTrust()
+        }
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.scheme == "opttab" {
+            if url.host == "show" {
+                Switcher.shared.showFromMenu()
             }
         }
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        EventTap.shared.stop()
+    @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
+        let string = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue ?? ""
+        if string.contains("show") {
+            Switcher.shared.showFromMenu()
+        }
     }
 
     private func setupStatusItem() {
@@ -53,18 +62,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func rebuildMenu() {
         let menu = NSMenu()
-        let trusted = AXIsProcessTrusted()
+        let ax = AXIsProcessTrusted()
+        let listen = CGPreflightListenEventAccess()
 
-        let status = NSMenuItem(
-            title: trusted ? "Accessibility: on" : "Accessibility: needed",
-            action: trusted ? nil : #selector(openAccessibilitySettings),
-            keyEquivalent: ""
-        )
-        status.target = self
-        menu.addItem(status)
+        let show = NSMenuItem(title: "Show Switcher", action: #selector(showSwitcher), keyEquivalent: "")
+        show.target = self
+        menu.addItem(show)
 
-        if !trusted {
-            let grant = NSMenuItem(title: "Grant Accessibility…", action: #selector(openAccessibilitySettings), keyEquivalent: "")
+        menu.addItem(.separator())
+
+        let screen = CGPreflightScreenCaptureAccess()
+
+        menu.addItem(statusItem(title: ax ? "Accessibility: on" : "Accessibility: needed", ok: ax))
+        menu.addItem(statusItem(title: listen ? "Input Monitoring: on" : "Input Monitoring: needed", ok: listen))
+        menu.addItem(statusItem(title: screen ? "Screen Recording: on" : "Screen Recording: needed for previews", ok: screen))
+
+        if !ax || !listen || !screen {
+            let grant = NSMenuItem(title: "Grant Permissions…", action: #selector(openPermissions), keyEquivalent: "")
             grant.target = self
             menu.addItem(grant)
         }
@@ -84,43 +98,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(quit)
 
         statusItem?.menu = menu
-        statusItem?.button?.appearsDisabled = !trusted
+        statusItem?.button?.appearsDisabled = !ax && !listen
+    }
+
+    private func statusItem(title: String, ok: Bool) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: ok ? nil : #selector(openPermissions), keyEquivalent: "")
+        item.target = ok ? nil : self
+        return item
     }
 
     private func refreshTrust() {
         rebuildMenu()
     }
 
-    private func promptForAccessibility() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
+    private func promptIfNeeded() {
+        if !AXIsProcessTrusted() {
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+        }
+        Hotkeys.shared.requestInputMonitoring()
+        if !CGPreflightScreenCaptureAccess() {
+            _ = CGRequestScreenCaptureAccess()
+        }
     }
 
-    @objc private func openAccessibilitySettings() {
-        promptForAccessibility()
+    @objc private func showSwitcher() {
+        Switcher.shared.showFromMenu()
+    }
+
+    @objc private func openPermissions() {
+        promptIfNeeded()
         let urls = [
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-            "x-apple.systemsettings:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
         ]
         for string in urls {
-            if let url = URL(string: string), NSWorkspace.shared.open(url) {
-                return
+            if let url = URL(string: string) {
+                NSWorkspace.shared.open(url)
             }
         }
-        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app"))
     }
 
     @objc private func toggleLoginItem() {
         LoginItem.toggle()
         rebuildMenu()
-    }
-
-    private func relaunch() {
-        let path = Bundle.main.bundlePath
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/sh")
-        proc.arguments = ["-c", "sleep 0.4; /usr/bin/open -a '\(path)'"]
-        try? proc.run()
-        NSApp.terminate(nil)
     }
 }

@@ -23,6 +23,8 @@ xcrun swiftc \
     -target arm64-apple-macosx14.0 \
     -framework AppKit \
     -framework ApplicationServices \
+    -framework Carbon \
+    -framework ScreenCaptureKit \
     -framework ServiceManagement \
     -o "$macos/OptTab" \
     "$root"/Sources/*.swift

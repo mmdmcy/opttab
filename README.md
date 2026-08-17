@@ -7,10 +7,8 @@ No Electron, no Swift packages, no Pro tier. Swift and AppKit only.
 ```
 ⌥ Tab
 
-  Chrome          Inbox — Gmail
-  Chrome          GitHub
-  VS Code         opttab
-  Terminal        zsh
+  [ Chrome preview ]  [ Chrome preview ]  [ VS Code ]  [ Terminal ]
+      Gmail               GitHub            opttab         zsh
 ```
 
 Release Option to focus the selected window. That is the whole point: macOS `⌘ Tab` still switches apps; OptTab switches windows.
@@ -33,7 +31,13 @@ cd opttab
 
 That builds `OptTab.app`, copies it to `/Applications`, and launches it.
 
-Grant **Accessibility** when asked (System Settings → Privacy & Security → Accessibility). Window switchers need it to read and focus other apps' windows. After granting, OptTab relaunches itself.
+Grant these when asked (System Settings → Privacy & Security):
+
+- **Accessibility** — list and focus other apps' windows
+- **Input Monitoring** — see Option+Tab while another app is focused
+- **Screen Recording** — live window previews in the switcher
+
+After granting, use the menu bar icon → **Show Switcher** to confirm the overlay, then press **Option+Tab**.
 
 Optional: click the menu bar icon → Launch at Login.
 
@@ -47,14 +51,14 @@ Optional: click the menu bar icon → Launch at Login.
 | release `⌥` | Focus selected window |
 | `esc` | Cancel |
 
-## Scope (v1)
+## Scope
 
 - Visible windows on the current space
-- App icon + window title
+- Horizontal Windows-style switcher with live previews
 - Focus that window, not merely its app
 - Skips Finder Desktop, menu-bar extras, and itself
 
-No thumbnails, no tiling WM, no `⌘ Tab` replacement.
+No tiling WM, no `⌘ Tab` replacement.
 
 ## Build without installing
 

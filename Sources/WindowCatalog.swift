@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import ScreenCaptureKit
 
 struct WindowEntry {
     let windowID: CGWindowID
@@ -97,6 +98,49 @@ enum WindowCatalog {
         }
 
         return result
+    }
+
+    static func preview(windowID: CGWindowID) -> NSImage? {
+        guard let image = CGWindowListCreateImage(
+            .null,
+            .optionIncludingWindow,
+            windowID,
+            [.boundsIgnoreFraming, .nominalResolution]
+        ), image.width > 16, image.height > 16 else {
+            return nil
+        }
+        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+    }
+
+    static func fillPreviews(windowIDs: [CGWindowID], handler: @escaping (CGWindowID, NSImage) -> Void) {
+        Task.detached {
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                let wanted = Set(windowIDs)
+                for window in content.windows where wanted.contains(window.windowID) {
+                    let width = max(window.frame.width, 1)
+                    let height = max(window.frame.height, 1)
+                    let maxEdge: CGFloat = 480
+                    let scale = min(maxEdge / width, maxEdge / height, 1)
+                    let filter = SCContentFilter(desktopIndependentWindow: window)
+                    let config = SCStreamConfiguration()
+                    config.width = max(2, Int(width * scale))
+                    config.height = max(2, Int(height * scale))
+                    config.showsCursor = false
+                    config.capturesAudio = false
+                    guard let image = try? await SCScreenshotManager.captureImage(
+                        contentFilter: filter,
+                        configuration: config
+                    ) else { continue }
+                    let nsImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+                    await MainActor.run {
+                        handler(window.windowID, nsImage)
+                    }
+                }
+            } catch {
+                NSLog("OptTab: previews \(error.localizedDescription)")
+            }
+        }
     }
 
     static func focus(_ entry: WindowEntry) {
