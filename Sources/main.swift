@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Switcher.shared.prepare()
         setupStatusItem()
         Hotkeys.shared.start()
+        Taskbar.shared.start()
         NSAppleEventManager.shared().setEventHandler(
             self,
             andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
@@ -47,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         Hotkeys.shared.stop()
+        Taskbar.shared.stop()
     }
 
     private func setupStatusItem() {
@@ -72,6 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         show.target = self
         menu.addItem(show)
 
+        let taskbar = NSMenuItem(title: "Bottom Taskbar", action: #selector(toggleTaskbar), keyEquivalent: "")
+        taskbar.target = self
+        taskbar.state = Taskbar.shared.isVisible ? .on : .off
+        menu.addItem(taskbar)
+
         menu.addItem(.separator())
 
         if ax {
@@ -92,8 +99,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         login.state = LoginItem.isEnabled ? .on : .off
         menu.addItem(login)
 
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Option+Tab switches windows", action: nil, keyEquivalent: ""))
+        let restoreDock = NSMenuItem(title: "Restore macOS Dock", action: #selector(restoreDock), keyEquivalent: "")
+        restoreDock.target = self
+        menu.addItem(restoreDock)
+
         menu.addItem(.separator())
 
         let quit = NSMenuItem(title: "Quit OptTab", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -104,6 +113,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func showSwitcher() {
         Switcher.shared.showFromMenu()
+    }
+
+    @objc private func toggleTaskbar() {
+        if Taskbar.shared.isVisible {
+            Taskbar.shared.stop()
+        } else {
+            Taskbar.shared.start()
+        }
     }
 
     @objc func openAccessSettings() {
@@ -119,6 +136,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         proc.arguments = ["-c", "sleep 0.4; /usr/bin/open -a '\(path)'"]
         try? proc.run()
         NSApp.terminate(nil)
+    }
+
+    @objc private func restoreDock() {
+        DockControl.restore()
     }
 
     @objc private func toggleLoginItem() {

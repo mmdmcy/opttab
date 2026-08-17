@@ -44,11 +44,39 @@ enum WindowCatalog {
         var seen = Set<CGWindowID>()
         var result: [WindowEntry] = []
 
+        func append(pid: pid_t, windowID: CGWindowID, owner: String, quartz: CGRect, cgTitle: String, axHint: AXUIElement? = nil) {
+            guard !seen.contains(windowID) else { return }
+            let app = NSRunningApplication(processIdentifier: pid)
+            if let bundle = app?.bundleIdentifier, bundle.hasPrefix("com.apple.controlcenter") {
+                return
+            }
+            let axList = axCache[pid] ?? {
+                let list = axWindows(pid: pid)
+                axCache[pid] = list
+                return list
+            }()
+            let ax = axHint ?? matchAX(axList, windowID: windowID, quartz: quartz)
+            if owner == "Finder", isDesktop(title: pickTitle(axTitle: ax.flatMap(title(of:)) ?? "", cgTitle: cgTitle, appName: owner), bounds: quartz) {
+                return
+            }
+            let axTitle = ax.flatMap(title(of:)) ?? ""
+            seen.insert(windowID)
+            result.append(
+                WindowEntry(
+                    windowID: windowID,
+                    pid: pid,
+                    appName: app?.localizedName ?? owner,
+                    title: pickTitle(axTitle: axTitle, cgTitle: cgTitle, appName: owner),
+                    icon: app?.icon,
+                    axWindow: ax
+                )
+            )
+        }
+
         for info in raw {
             guard let pid = info[kCGWindowOwnerPID as String] as? pid_t,
                   pid != ourPID,
-                  let windowID = info[kCGWindowNumber as String] as? CGWindowID,
-                  !seen.contains(windowID)
+                  let windowID = info[kCGWindowNumber as String] as? CGWindowID
             else { continue }
 
             let layer = (info[kCGWindowLayer as String] as? Int) ?? 0
@@ -65,57 +93,104 @@ enum WindowCatalog {
             let cgTitle = (info[kCGWindowName as String] as? String) ?? ""
             if owner == "Finder", isDesktop(title: cgTitle, bounds: quartz) { continue }
 
-            let app = NSRunningApplication(processIdentifier: pid)
-            if let bundle = app?.bundleIdentifier, bundle.hasPrefix("com.apple.controlcenter") {
-                continue
-            }
+            append(pid: pid, windowID: windowID, owner: owner, quartz: quartz, cgTitle: cgTitle)
+        }
 
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular && app.processIdentifier != ourPID {
+            let pid = app.processIdentifier
             let axList = axCache[pid] ?? {
                 let list = axWindows(pid: pid)
                 axCache[pid] = list
                 return list
             }()
-
-            let ax = matchAX(axList, quartz: quartz)
-            if isMinimized(ax) { continue }
-
-            let axTitle = ax.flatMap(title(of:)) ?? ""
-            let title = pickTitle(axTitle: axTitle, cgTitle: cgTitle, appName: owner)
-            if owner == "Finder", isDesktop(title: title, bounds: quartz) { continue }
-
-            seen.insert(windowID)
-            result.append(
-                WindowEntry(
-                    windowID: windowID,
+            for ax in axList where isMinimized(ax) {
+                let windowID = PrivateCalls.cgWindowID(of: ax) ?? 0
+                guard windowID != 0 else { continue }
+                append(
                     pid: pid,
-                    appName: app?.localizedName ?? owner,
-                    title: title,
-                    icon: app?.icon,
-                    axWindow: ax
+                    windowID: windowID,
+                    owner: app.localizedName ?? "",
+                    quartz: bounds(of: ax) ?? .zero,
+                    cgTitle: title(of: ax) ?? "",
+                    axHint: ax
                 )
-            )
+            }
         }
 
         return result
     }
 
     static func focus(_ entry: WindowEntry) {
-        guard let app = NSRunningApplication(processIdentifier: entry.pid) else { return }
-        NSApp.yieldActivation(to: app)
-        app.activate()
+        let ax = entry.axWindow ?? axWindows(pid: entry.pid).first { PrivateCalls.cgWindowID(of: $0) == entry.windowID }
 
+        if let ax {
+            AXUIElementSetAttributeValue(ax, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        }
+
+        if let app = NSRunningApplication(processIdentifier: entry.pid) {
+            if app.isHidden {
+                app.unhide()
+            }
+            AXUIElementSetAttributeValue(AXUIElementCreateApplication(entry.pid), kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+            NSApp.yieldActivation(to: app)
+            app.activate()
+        }
+
+        PrivateCalls.setFront(pid: entry.pid, windowID: entry.windowID)
+        raise(ax, pid: entry.pid)
+
+        DispatchQueue.main.async {
+            PrivateCalls.setFront(pid: entry.pid, windowID: entry.windowID)
+            raise(ax, pid: entry.pid)
+            NSRunningApplication(processIdentifier: entry.pid)?.activate()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            PrivateCalls.setFront(pid: entry.pid, windowID: entry.windowID)
+            raise(ax, pid: entry.pid)
+        }
+    }
+
+    static func toggle(_ entry: WindowEntry) {
+        if isFrontmost(entry) {
+            minimize(entry)
+        } else {
+            focus(entry)
+        }
+    }
+
+    static func isFrontmost(_ entry: WindowEntry) -> Bool {
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == entry.pid else { return false }
+        return list().first?.windowID == entry.windowID
+    }
+
+    static func minimize(_ entry: WindowEntry) {
         guard let ax = entry.axWindow else { return }
+        AXUIElementSetAttributeValue(ax, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+    }
+
+    static func close(_ entry: WindowEntry) {
+        guard let ax = entry.axWindow else { return }
+        var buttonRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(ax, kAXCloseButtonAttribute as CFString, &buttonRef) == .success,
+           let button = buttonRef {
+            AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
+        }
+    }
+
+    private static func raise(_ ax: AXUIElement?, pid: pid_t) {
+        guard let ax else { return }
         AXUIElementPerformAction(ax, kAXRaiseAction as CFString)
         AXUIElementSetAttributeValue(ax, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementSetAttributeValue(ax, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-
-        let appElement = AXUIElementCreateApplication(entry.pid)
-        AXUIElementSetAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, ax)
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetAttributeValue(app, kAXFocusedWindowAttribute as CFString, ax)
+        AXUIElementSetAttributeValue(app, kAXMainWindowAttribute as CFString, ax)
+        AXUIElementPerformAction(ax, kAXRaiseAction as CFString)
     }
 
     private static func axWindows(pid: pid_t) -> [AXUIElement] {
         let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(app, 0.15)
+        AXUIElementSetMessagingTimeout(app, 0.08)
         var ref: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &ref) == .success,
               let windows = ref as? [AXUIElement]
@@ -123,7 +198,12 @@ enum WindowCatalog {
         return windows.filter { role(of: $0) == (kAXWindowRole as String) }
     }
 
-    private static func matchAX(_ windows: [AXUIElement], quartz: CGRect) -> AXUIElement? {
+    private static func matchAX(_ windows: [AXUIElement], windowID: CGWindowID, quartz: CGRect) -> AXUIElement? {
+        for window in windows {
+            if PrivateCalls.cgWindowID(of: window) == windowID {
+                return window
+            }
+        }
         let cocoa = cocoaRect(fromQuartz: quartz)
         var best: (AXUIElement, CGFloat)?
         for window in windows {
