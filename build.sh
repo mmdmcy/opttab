@@ -29,7 +29,10 @@ xcrun swiftc \
     "$root"/Sources/*.swift
 
 strip "$macos/OptTab"
-codesign --force --sign - --identifier com.mmdmcy.opttab --timestamp=none "$app" >/dev/null
+
+. "$root/scripts/sign.sh"
+sign_opttab "$app"
 
 printf '%s\n' "Built $app"
 ls -lh "$macos/OptTab"
+codesign -d -r - "$app" 2>&1 | sed -n 's/^.*designated => /signed: /p'

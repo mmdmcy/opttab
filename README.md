@@ -33,7 +33,7 @@ cd opttab
 
 That builds `OptTab.app`, copies it to `/Applications`, and launches it.
 
-If a yellow line appears in the overlay, click it to open **System Settings → Privacy & Security → Accessibility** and enable OptTab. OptTab does not keep asking with system popups.
+If a previous OptTab row is already enabled in Accessibility, turn it off and on once after install, then choose **Relaunch OptTab** from the menu bar. Rebuilds keep the same signature, so you should not have to do that again.
 
 Optional: menu bar icon → Launch at Login.
 

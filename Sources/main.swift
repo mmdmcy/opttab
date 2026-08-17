@@ -77,9 +77,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if ax {
             menu.addItem(NSMenuItem(title: "Accessibility: on", action: nil, keyEquivalent: ""))
         } else {
-            let grant = NSMenuItem(title: "Grant Accessibility…", action: #selector(openAccessSettings), keyEquivalent: "")
+            let grant = NSMenuItem(title: "Open Accessibility Settings", action: #selector(openAccessSettings), keyEquivalent: "")
             grant.target = self
             menu.addItem(grant)
+            let relaunch = NSMenuItem(title: "Relaunch OptTab", action: #selector(relaunch), keyEquivalent: "")
+            relaunch.target = self
+            menu.addItem(relaunch)
         }
 
         menu.addItem(.separator())
@@ -104,15 +107,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func openAccessSettings() {
-        let urls = [
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
-        ]
-        for string in urls {
-            if let url = URL(string: string) {
-                NSWorkspace.shared.open(url)
-            }
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
         }
+    }
+
+    @objc private func relaunch() {
+        let path = Bundle.main.bundlePath
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/sh")
+        proc.arguments = ["-c", "sleep 0.4; /usr/bin/open -a '\(path)'"]
+        try? proc.run()
+        NSApp.terminate(nil)
     }
 
     @objc private func toggleLoginItem() {

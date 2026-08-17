@@ -17,9 +17,6 @@ final class Switcher {
             self.index = index
             self.commit()
         }
-        hud.onRequestAccess = {
-            AppDelegate.shared.openAccessSettings()
-        }
     }
 
     var isShowing: Bool { showing }

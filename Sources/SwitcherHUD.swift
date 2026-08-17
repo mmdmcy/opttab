@@ -2,7 +2,6 @@ import AppKit
 
 final class SwitcherHUD {
     var onChoose: ((Int) -> Void)?
-    var onRequestAccess: (() -> Void)?
     private(set) var columns = 1
 
     private var panel: NSPanel?
@@ -15,7 +14,7 @@ final class SwitcherHUD {
         }
         guard let panel else { return 1 }
 
-        let metrics = Metrics.make(count: entries.count, screen: currentScreen(), needsBanner: !AXIsProcessTrusted())
+        let metrics = Metrics.make(count: entries.count, screen: currentScreen())
         columns = metrics.columns
         rebuild(entries: entries, metrics: metrics)
         layout(on: panel, metrics: metrics)
@@ -106,17 +105,6 @@ final class SwitcherHUD {
             ])
         }
 
-        var banner: NSView?
-        if metrics.needsBanner {
-            let button = NSButton(title: "Accessibility is off — click here to grant it", target: self, action: #selector(requestAccess))
-            button.isBordered = false
-            button.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-            button.contentTintColor = NSColor.systemYellow
-            button.translatesAutoresizingMaskIntoConstraints = false
-            content.addSubview(button)
-            banner = button
-        }
-
         let gridHeight = CGFloat(metrics.rows) * metrics.cardHeight + CGFloat(max(metrics.rows - 1, 0)) * metrics.gap
         let gridWidth = CGFloat(metrics.columns) * metrics.cardWidth + CGFloat(max(metrics.columns - 1, 0)) * metrics.gap
 
@@ -125,34 +113,20 @@ final class SwitcherHUD {
             grid.centerXAnchor.constraint(equalTo: content.centerXAnchor),
             grid.widthAnchor.constraint(equalToConstant: max(gridWidth, 1)),
             grid.heightAnchor.constraint(equalToConstant: max(gridHeight, 1)),
+            grid.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -metrics.inset),
         ])
-
-        if let banner {
-            NSLayoutConstraint.activate([
-                banner.topAnchor.constraint(equalTo: grid.bottomAnchor, constant: 10),
-                banner.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-                banner.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
-            ])
-        } else {
-            grid.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -metrics.inset).isActive = true
-        }
     }
 
     private func layout(on panel: NSPanel, metrics: Metrics) {
         let gridWidth = CGFloat(metrics.columns) * metrics.cardWidth + CGFloat(max(metrics.columns - 1, 0)) * metrics.gap
         let gridHeight = CGFloat(metrics.rows) * metrics.cardHeight + CGFloat(max(metrics.rows - 1, 0)) * metrics.gap
-        let banner: CGFloat = metrics.needsBanner ? 32 : 0
         let width = metrics.inset * 2 + gridWidth
-        let height = metrics.inset * 2 + gridHeight + banner
+        let height = metrics.inset * 2 + gridHeight
         let frame = currentScreen()?.visibleFrame ?? NSRect(x: 0, y: 0, width: 800, height: 600)
         panel.setFrame(
             NSRect(x: frame.midX - width / 2, y: frame.midY - height / 2 + 24, width: width, height: height),
             display: true
         )
-    }
-
-    @objc private func requestAccess() {
-        onRequestAccess?()
     }
 }
 
@@ -164,16 +138,15 @@ private struct Metrics {
     let iconSize: CGFloat
     let gap: CGFloat
     let inset: CGFloat
-    let needsBanner: Bool
 
-    static func make(count: Int, screen: NSScreen?, needsBanner: Bool) -> Metrics {
+    static func make(count: Int, screen: NSScreen?) -> Metrics {
         let count = max(count, 1)
         let columns = max(1, Int(ceil(sqrt(Double(count)))))
         let rows = max(1, Int(ceil(Double(count) / Double(columns))))
         let frame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
         let gap: CGFloat = 8
         let inset: CGFloat = 16
-        let banner: CGFloat = needsBanner ? 32 : 0
+        let banner: CGFloat = 0
         let maxW = frame.width * 0.72
         let maxH = frame.height * 0.64
         let cardWidth = min(156, max(108, floor((maxW - inset * 2 - gap * CGFloat(columns - 1)) / CGFloat(columns))))
@@ -186,8 +159,7 @@ private struct Metrics {
             cardHeight: cardHeight,
             iconSize: iconSize,
             gap: gap,
-            inset: inset,
-            needsBanner: needsBanner
+            inset: inset
         )
     }
 }

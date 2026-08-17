@@ -17,9 +17,12 @@ fi
 
 rm -rf /Applications/OptTab.app
 cp -R "$app" /Applications/OptTab.app
-codesign --force --sign - --identifier com.mmdmcy.opttab --timestamp=none /Applications/OptTab.app >/dev/null
+xattr -cr /Applications/OptTab.app 2>/dev/null || true
+
+. "$root/scripts/sign.sh"
+sign_opttab /Applications/OptTab.app
 
 open /Applications/OptTab.app
 
 printf '%s\n' "Installed /Applications/OptTab.app"
-printf '%s\n' "Press Option+Tab. If a yellow line appears in the overlay, click it to grant Accessibility."
+printf '%s\n' "This build uses a stable signature. In Accessibility, turn OptTab off and on once, then Relaunch from the menu bar."
