@@ -13,28 +13,21 @@ enum OptTab {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static let shared = AppDelegate()
 
     private var statusItem: NSStatusItem?
-    private var trustTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Switcher.shared.prepare()
         setupStatusItem()
         Hotkeys.shared.start()
-        refreshTrust()
-        promptIfNeeded()
         NSAppleEventManager.shared().setEventHandler(
             self,
             andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
             forEventClass: AEEventClass(kInternetEventClass),
             andEventID: AEEventID(kAEGetURL)
         )
-
-        trustTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            self?.refreshTrust()
-        }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -52,18 +45,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        Hotkeys.shared.stop()
+    }
+
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "OptTab")
         item.button?.image?.isTemplate = true
+        let menu = NSMenu()
+        menu.delegate = self
+        item.menu = menu
         statusItem = item
-        rebuildMenu()
+        rebuildMenu(menu)
     }
 
-    private func rebuildMenu() {
-        let menu = NSMenu()
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        rebuildMenu(menu)
+    }
+
+    private func rebuildMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
         let ax = AXIsProcessTrusted()
-        let listen = CGPreflightListenEventAccess()
 
         let show = NSMenuItem(title: "Show Switcher", action: #selector(showSwitcher), keyEquivalent: "")
         show.target = self
@@ -71,14 +74,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        let screen = CGPreflightScreenCaptureAccess()
-
-        menu.addItem(statusItem(title: ax ? "Accessibility: on" : "Accessibility: needed", ok: ax))
-        menu.addItem(statusItem(title: listen ? "Input Monitoring: on" : "Input Monitoring: needed", ok: listen))
-        menu.addItem(statusItem(title: screen ? "Screen Recording: on" : "Screen Recording: needed for previews", ok: screen))
-
-        if !ax || !listen || !screen {
-            let grant = NSMenuItem(title: "Grant Permissions…", action: #selector(openPermissions), keyEquivalent: "")
+        if ax {
+            menu.addItem(NSMenuItem(title: "Accessibility: on", action: nil, keyEquivalent: ""))
+        } else {
+            let grant = NSMenuItem(title: "Grant Accessibility…", action: #selector(openAccessSettings), keyEquivalent: "")
             grant.target = self
             menu.addItem(grant)
         }
@@ -97,41 +96,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let quit = NSMenuItem(title: "Quit OptTab", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
 
-        statusItem?.menu = menu
-        statusItem?.button?.appearsDisabled = !ax && !listen
-    }
-
-    private func statusItem(title: String, ok: Bool) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: ok ? nil : #selector(openPermissions), keyEquivalent: "")
-        item.target = ok ? nil : self
-        return item
-    }
-
-    private func refreshTrust() {
-        rebuildMenu()
-    }
-
-    private func promptIfNeeded() {
-        if !AXIsProcessTrusted() {
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(options)
-        }
-        Hotkeys.shared.requestInputMonitoring()
-        if !CGPreflightScreenCaptureAccess() {
-            _ = CGRequestScreenCaptureAccess()
-        }
+        statusItem?.button?.appearsDisabled = !ax
     }
 
     @objc private func showSwitcher() {
         Switcher.shared.showFromMenu()
     }
 
-    @objc private func openPermissions() {
-        promptIfNeeded()
+    @objc func openAccessSettings() {
         let urls = [
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
         ]
         for string in urls {
             if let url = URL(string: string) {
@@ -142,6 +117,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleLoginItem() {
         LoginItem.toggle()
-        rebuildMenu()
+        if let menu = statusItem?.menu {
+            rebuildMenu(menu)
+        }
     }
 }

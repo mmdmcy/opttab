@@ -22,4 +22,4 @@ codesign --force --sign - --identifier com.mmdmcy.opttab --timestamp=none /Appli
 open /Applications/OptTab.app
 
 printf '%s\n' "Installed /Applications/OptTab.app"
-printf '%s\n' "Grant Accessibility to OptTab, then press Option+Tab."
+printf '%s\n' "Press Option+Tab. If a yellow line appears in the overlay, click it to grant Accessibility."

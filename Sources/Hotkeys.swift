@@ -16,7 +16,6 @@ final class Hotkeys {
         stop()
         installCarbon()
         installMonitors()
-        requestInputMonitoring()
         installTapIfAllowed()
         NSLog(
             "OptTab: hotkeys started ax=%d listen=%d carbon=%d tap=%d",
@@ -44,12 +43,6 @@ final class Hotkeys {
         }
         tapPort = nil
         tapSource = nil
-    }
-
-    func requestInputMonitoring() {
-        if !CGPreflightListenEventAccess() {
-            _ = CGRequestListenEventAccess()
-        }
     }
 
     func reenableTap() {
@@ -105,7 +98,7 @@ final class Hotkeys {
     }
 
     private func installTapIfAllowed() {
-        guard CGPreflightListenEventAccess() || AXIsProcessTrusted() else { return }
+        guard CGPreflightListenEventAccess() else { return }
 
         let mask =
             (1 << CGEventType.keyDown.rawValue) |

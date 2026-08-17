@@ -2,38 +2,36 @@ import AppKit
 
 final class SwitcherHUD {
     var onChoose: ((Int) -> Void)?
+    var onRequestAccess: (() -> Void)?
+    private(set) var columns = 1
 
     private var panel: NSPanel?
     private var cards: [CardView] = []
-    private var scroll: NSScrollView?
-    private var captureGeneration = 0
 
-    func show(entries: [WindowEntry], selected: Int) {
+    @discardableResult
+    func show(entries: [WindowEntry], selected: Int) -> Int {
         if panel == nil {
             panel = makePanel()
         }
-        guard let panel else { return }
+        guard let panel else { return 1 }
 
-        let metrics = Metrics.make(count: entries.count, screen: currentScreen())
+        let metrics = Metrics.make(count: entries.count, screen: currentScreen(), needsBanner: !AXIsProcessTrusted())
+        columns = metrics.columns
         rebuild(entries: entries, metrics: metrics)
-        layout(on: panel, metrics: metrics, count: entries.count)
+        layout(on: panel, metrics: metrics)
         select(selected)
         panel.alphaValue = 1
         panel.orderFrontRegardless()
-        loadPreviews(entries)
+        return columns
     }
 
     func hide() {
-        captureGeneration += 1
         panel?.orderOut(nil)
     }
 
     func select(_ index: Int) {
         for (i, card) in cards.enumerated() {
             card.selected = i == index
-            if i == index {
-                card.scrollToVisible(card.bounds.insetBy(dx: -24, dy: -12))
-            }
         }
     }
 
@@ -45,7 +43,7 @@ final class SwitcherHUD {
 
     private func makePanel() -> NSPanel {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 280),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 320),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -68,9 +66,9 @@ final class SwitcherHUD {
         effect.blendingMode = .behindWindow
         effect.state = .active
         effect.wantsLayer = true
-        effect.layer?.cornerRadius = 12
+        effect.layer?.cornerRadius = 14
         effect.layer?.masksToBounds = true
-        effect.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.42).cgColor
+        effect.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.38).cgColor
         panel.contentView = effect
         return panel
     }
@@ -80,225 +78,181 @@ final class SwitcherHUD {
         content.subviews.forEach { $0.removeFromSuperview() }
         cards.removeAll()
 
-        let stack = NSStackView()
-        stack.orientation = .horizontal
-        stack.alignment = .top
-        stack.spacing = metrics.gap
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        let grid = NSView()
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(grid)
 
         for (index, entry) in entries.enumerated() {
-            let card = CardView(entry: entry, metrics: metrics)
+            let card = CardView(entry: entry, iconSize: metrics.iconSize)
             card.translatesAutoresizingMaskIntoConstraints = false
             card.onClick = { [weak self] in
                 self?.onChoose?(index)
             }
+            let col = index % metrics.columns
+            let row = index / metrics.columns
+            grid.addSubview(card)
+            cards.append(card)
             NSLayoutConstraint.activate([
                 card.widthAnchor.constraint(equalToConstant: metrics.cardWidth),
                 card.heightAnchor.constraint(equalToConstant: metrics.cardHeight),
+                card.leadingAnchor.constraint(
+                    equalTo: grid.leadingAnchor,
+                    constant: CGFloat(col) * (metrics.cardWidth + metrics.gap)
+                ),
+                card.topAnchor.constraint(
+                    equalTo: grid.topAnchor,
+                    constant: CGFloat(row) * (metrics.cardHeight + metrics.gap)
+                ),
             ])
-            if let preview = WindowCatalog.preview(windowID: entry.windowID) {
-                card.setPreview(preview)
-            }
-            cards.append(card)
-            stack.addArrangedSubview(card)
         }
 
-        let needsScroll = entries.count > metrics.visibleCount
-        if needsScroll {
-            let scroll = NSScrollView()
-            scroll.drawsBackground = false
-            scroll.hasHorizontalScroller = true
-            scroll.hasVerticalScroller = false
-            scroll.autohidesScrollers = true
-            scroll.horizontalScrollElasticity = .allowed
-            scroll.verticalScrollElasticity = .none
-            scroll.translatesAutoresizingMaskIntoConstraints = false
-            let document = NSView()
-            let width = CGFloat(entries.count) * metrics.cardWidth + CGFloat(max(entries.count - 1, 0)) * metrics.gap
-            document.frame = NSRect(x: 0, y: 0, width: width, height: metrics.cardHeight)
-            document.addSubview(stack)
-            stack.translatesAutoresizingMaskIntoConstraints = true
-            stack.frame = document.bounds
-            scroll.documentView = document
-            self.scroll = scroll
-            content.addSubview(scroll)
+        var banner: NSView?
+        if metrics.needsBanner {
+            let button = NSButton(title: "Accessibility is off — click here to grant it", target: self, action: #selector(requestAccess))
+            button.isBordered = false
+            button.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+            button.contentTintColor = NSColor.systemYellow
+            button.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(button)
+            banner = button
+        }
+
+        let gridHeight = CGFloat(metrics.rows) * metrics.cardHeight + CGFloat(max(metrics.rows - 1, 0)) * metrics.gap
+        let gridWidth = CGFloat(metrics.columns) * metrics.cardWidth + CGFloat(max(metrics.columns - 1, 0)) * metrics.gap
+
+        NSLayoutConstraint.activate([
+            grid.topAnchor.constraint(equalTo: content.topAnchor, constant: metrics.inset),
+            grid.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            grid.widthAnchor.constraint(equalToConstant: max(gridWidth, 1)),
+            grid.heightAnchor.constraint(equalToConstant: max(gridHeight, 1)),
+        ])
+
+        if let banner {
             NSLayoutConstraint.activate([
-                scroll.topAnchor.constraint(equalTo: content.topAnchor, constant: metrics.inset),
-                scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: metrics.inset),
-                scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -metrics.inset),
-                scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -metrics.inset),
+                banner.topAnchor.constraint(equalTo: grid.bottomAnchor, constant: 10),
+                banner.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+                banner.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
             ])
         } else {
-            self.scroll = nil
-            content.addSubview(stack)
-            NSLayoutConstraint.activate([
-                stack.topAnchor.constraint(equalTo: content.topAnchor, constant: metrics.inset),
-                stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: metrics.inset),
-                stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -metrics.inset),
-                stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -metrics.inset),
-            ])
+            grid.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -metrics.inset).isActive = true
         }
     }
 
-    private func layout(on panel: NSPanel, metrics: Metrics, count: Int) {
-        let visible = min(count, metrics.visibleCount)
-        let width = metrics.inset * 2
-            + CGFloat(visible) * metrics.cardWidth
-            + CGFloat(max(visible - 1, 0)) * metrics.gap
-        let height = metrics.inset * 2 + metrics.cardHeight
+    private func layout(on panel: NSPanel, metrics: Metrics) {
+        let gridWidth = CGFloat(metrics.columns) * metrics.cardWidth + CGFloat(max(metrics.columns - 1, 0)) * metrics.gap
+        let gridHeight = CGFloat(metrics.rows) * metrics.cardHeight + CGFloat(max(metrics.rows - 1, 0)) * metrics.gap
+        let banner: CGFloat = metrics.needsBanner ? 32 : 0
+        let width = metrics.inset * 2 + gridWidth
+        let height = metrics.inset * 2 + gridHeight + banner
         let frame = currentScreen()?.visibleFrame ?? NSRect(x: 0, y: 0, width: 800, height: 600)
-        let x = frame.midX - width / 2
-        let y = frame.midY - height / 2 + 28
-        panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
+        panel.setFrame(
+            NSRect(x: frame.midX - width / 2, y: frame.midY - height / 2 + 24, width: width, height: height),
+            display: true
+        )
     }
 
-    private func loadPreviews(_ entries: [WindowEntry]) {
-        captureGeneration += 1
-        let generation = captureGeneration
-        let missing = entries.enumerated().compactMap { index, entry -> CGWindowID? in
-            cards.indices.contains(index) && cards[index].hasPreview ? nil : entry.windowID
-        }
-        guard !missing.isEmpty else { return }
-
-        WindowCatalog.fillPreviews(windowIDs: missing) { [weak self] windowID, image in
-            guard let self, self.captureGeneration == generation else { return }
-            if let index = entries.firstIndex(where: { $0.windowID == windowID }) {
-                self.cards[index].setPreview(image)
-            }
-        }
+    @objc private func requestAccess() {
+        onRequestAccess?()
     }
 }
 
 private struct Metrics {
-    let thumbWidth: CGFloat
-    let thumbHeight: CGFloat
+    let columns: Int
+    let rows: Int
     let cardWidth: CGFloat
     let cardHeight: CGFloat
+    let iconSize: CGFloat
     let gap: CGFloat
     let inset: CGFloat
-    let visibleCount: Int
+    let needsBanner: Bool
 
-    static func make(count: Int, screen: NSScreen?) -> Metrics {
-        let screenWidth = screen?.visibleFrame.width ?? 1280
-        let inset: CGFloat = 22
-        let gap: CGFloat = 10
-        let caption: CGFloat = 34
-        let ring: CGFloat = 10
-        let maxWidth = screenWidth * 0.84
-
-        let targetThumb: CGFloat
-        switch count {
-        case ...3: targetThumb = 260
-        case 4...6: targetThumb = 200
-        default: targetThumb = 164
-        }
-
-        let maxVisible = 7
-        let visible = min(max(count, 1), maxVisible)
-        let usable = maxWidth - inset * 2 - gap * CGFloat(visible - 1)
-        let cardWidth = min(targetThumb + ring * 2, floor(usable / CGFloat(visible)))
-        let thumbWidth = max(cardWidth - ring * 2, 96)
-        let thumbHeight = floor(thumbWidth * 0.62)
+    static func make(count: Int, screen: NSScreen?, needsBanner: Bool) -> Metrics {
+        let count = max(count, 1)
+        let columns = max(1, Int(ceil(sqrt(Double(count)))))
+        let rows = max(1, Int(ceil(Double(count) / Double(columns))))
+        let frame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+        let gap: CGFloat = 8
+        let inset: CGFloat = 16
+        let banner: CGFloat = needsBanner ? 32 : 0
+        let maxW = frame.width * 0.72
+        let maxH = frame.height * 0.64
+        let cardWidth = min(156, max(108, floor((maxW - inset * 2 - gap * CGFloat(columns - 1)) / CGFloat(columns))))
+        let cardHeight = min(128, max(92, floor((maxH - inset * 2 - banner - gap * CGFloat(rows - 1)) / CGFloat(rows))))
+        let iconSize: CGFloat = cardHeight >= 116 ? 52 : 40
         return Metrics(
-            thumbWidth: thumbWidth,
-            thumbHeight: thumbHeight,
+            columns: columns,
+            rows: rows,
             cardWidth: cardWidth,
-            cardHeight: thumbHeight + caption + ring * 2,
+            cardHeight: cardHeight,
+            iconSize: iconSize,
             gap: gap,
             inset: inset,
-            visibleCount: maxVisible
+            needsBanner: needsBanner
         )
     }
 }
 
 private final class CardView: NSView {
     var onClick: (() -> Void)?
-    private(set) var hasPreview = false
     var selected = false {
         didSet { needsDisplay = true }
     }
 
-    private let previewView = NSImageView()
-    private let iconView = NSImageView()
-    private let titleField = NSTextField(labelWithString: "")
-    private let placeholderIcon = NSImageView()
-
-    init(entry: WindowEntry, metrics: Metrics) {
+    init(entry: WindowEntry, iconSize: CGFloat) {
         super.init(frame: .zero)
         wantsLayer = true
+        layer?.cornerRadius = 10
 
-        previewView.imageScaling = .scaleProportionallyUpOrDown
-        previewView.imageAlignment = .alignCenter
-        previewView.wantsLayer = true
-        previewView.layer?.cornerRadius = 6
-        previewView.layer?.masksToBounds = true
-        previewView.layer?.backgroundColor = NSColor(white: 0.09, alpha: 1).cgColor
-        previewView.translatesAutoresizingMaskIntoConstraints = false
-
-        placeholderIcon.image = entry.icon
-        placeholderIcon.imageScaling = .scaleProportionallyDown
-        placeholderIcon.translatesAutoresizingMaskIntoConstraints = false
-
+        let iconView = NSImageView()
         iconView.image = entry.icon
         iconView.imageScaling = .scaleProportionallyDown
-        iconView.wantsLayer = true
-        iconView.shadow = {
-            let shadow = NSShadow()
-            shadow.shadowBlurRadius = 6
-            shadow.shadowOffset = NSSize(width: 0, height: -1)
-            shadow.shadowColor = NSColor.black.withAlphaComponent(0.55)
-            return shadow
-        }()
         iconView.translatesAutoresizingMaskIntoConstraints = false
 
-        titleField.stringValue = entry.title
-        titleField.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        titleField.textColor = NSColor.white.withAlphaComponent(0.92)
+        let titleField = NSTextField(labelWithString: entry.title)
+        titleField.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        titleField.textColor = .white
         titleField.alignment = .center
         titleField.lineBreakMode = .byTruncatingTail
         titleField.drawsBackground = false
         titleField.translatesAutoresizingMaskIntoConstraints = false
 
-        addSubview(previewView)
-        addSubview(placeholderIcon)
+        let subtitle = entry.appName == entry.title ? "" : entry.appName
+        let subtitleField = NSTextField(labelWithString: subtitle)
+        subtitleField.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        subtitleField.textColor = NSColor.white.withAlphaComponent(0.55)
+        subtitleField.alignment = .center
+        subtitleField.lineBreakMode = .byTruncatingTail
+        subtitleField.drawsBackground = false
+        subtitleField.translatesAutoresizingMaskIntoConstraints = false
+
         addSubview(iconView)
         addSubview(titleField)
+        addSubview(subtitleField)
 
         NSLayoutConstraint.activate([
-            previewView.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            previewView.centerXAnchor.constraint(equalTo: centerXAnchor),
-            previewView.widthAnchor.constraint(equalToConstant: metrics.thumbWidth),
-            previewView.heightAnchor.constraint(equalToConstant: metrics.thumbHeight),
-            placeholderIcon.centerXAnchor.constraint(equalTo: previewView.centerXAnchor),
-            placeholderIcon.centerYAnchor.constraint(equalTo: previewView.centerYAnchor),
-            placeholderIcon.widthAnchor.constraint(equalToConstant: 54),
-            placeholderIcon.heightAnchor.constraint(equalToConstant: 54),
-            iconView.leadingAnchor.constraint(equalTo: previewView.leadingAnchor, constant: 7),
-            iconView.bottomAnchor.constraint(equalTo: previewView.bottomAnchor, constant: -7),
-            iconView.widthAnchor.constraint(equalToConstant: 26),
-            iconView.heightAnchor.constraint(equalToConstant: 26),
-            titleField.topAnchor.constraint(equalTo: previewView.bottomAnchor, constant: 7),
-            titleField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            titleField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            iconView.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: iconSize),
+            iconView.heightAnchor.constraint(equalToConstant: iconSize),
+            titleField.topAnchor.constraint(equalTo: iconView.bottomAnchor, constant: 8),
+            titleField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            titleField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            subtitleField.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 1),
+            subtitleField.leadingAnchor.constraint(equalTo: titleField.leadingAnchor),
+            subtitleField.trailingAnchor.constraint(equalTo: titleField.trailingAnchor),
         ])
     }
 
     required init?(coder: NSCoder) { nil }
 
-    func setPreview(_ image: NSImage) {
-        previewView.image = image
-        placeholderIcon.isHidden = true
-        hasPreview = true
-    }
-
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         if selected {
-            NSColor.white.withAlphaComponent(0.10).setFill()
+            NSColor.white.withAlphaComponent(0.14).setFill()
             NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 10, yRadius: 10).fill()
-            let ring = NSBezierPath(roundedRect: previewView.frame.insetBy(dx: -3, dy: -3), xRadius: 8, yRadius: 8)
+            NSColor.white.withAlphaComponent(0.9).setStroke()
+            let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 9, yRadius: 9)
             ring.lineWidth = 2
-            NSColor.white.withAlphaComponent(0.92).setStroke()
             ring.stroke()
         }
     }

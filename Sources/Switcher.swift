@@ -17,6 +17,9 @@ final class Switcher {
             self.index = index
             self.commit()
         }
+        hud.onRequestAccess = {
+            AppDelegate.shared.openAccessSettings()
+        }
     }
 
     var isShowing: Bool { showing }
@@ -53,12 +56,20 @@ final class Switcher {
             cancel()
             return true
         }
-        if showing, event.keyCode == 123 || event.keyCode == 126 {
-            present(reverse: true, force: false)
+        if showing, event.keyCode == 123 { // left
+            move(dx: -1, dy: 0)
             return true
         }
-        if showing, event.keyCode == 124 || event.keyCode == 125 {
-            present(reverse: false, force: false)
+        if showing, event.keyCode == 124 { // right
+            move(dx: 1, dy: 0)
+            return true
+        }
+        if showing, event.keyCode == 126 { // up
+            move(dx: 0, dy: -1)
+            return true
+        }
+        if showing, event.keyCode == 125 { // down
+            move(dx: 0, dy: 1)
             return true
         }
         if event.keyCode == 48, option, !command, !control {
@@ -102,11 +113,17 @@ final class Switcher {
         case 53 where showing:
             if type == .keyDown { cancel() }
             return true
-        case 123 where showing, 126 where showing:
-            if type == .keyDown { present(reverse: true, force: false) }
+        case 123 where showing:
+            if type == .keyDown { move(dx: -1, dy: 0) }
             return true
-        case 124 where showing, 125 where showing:
-            if type == .keyDown { present(reverse: false, force: false) }
+        case 124 where showing:
+            if type == .keyDown { move(dx: 1, dy: 0) }
+            return true
+        case 126 where showing:
+            if type == .keyDown { move(dx: 0, dy: -1) }
+            return true
+        case 125 where showing:
+            if type == .keyDown { move(dx: 0, dy: 1) }
             return true
         default:
             return false
@@ -147,6 +164,36 @@ final class Switcher {
             index = (index - 1 + entries.count) % entries.count
         } else {
             index = (index + 1) % entries.count
+        }
+        hud.select(index)
+    }
+
+    private func move(dx: Int, dy: Int) {
+        guard showing, !entries.isEmpty else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastFire < 0.04 { return }
+        lastFire = now
+
+        let cols = max(hud.columns, 1)
+        let count = entries.count
+        let row = index / cols
+        let col = index % cols
+        let rows = (count + cols - 1) / cols
+
+        if dx != 0 {
+            var next = index + dx
+            if next < 0 { next = count - 1 }
+            if next >= count { next = 0 }
+            index = next
+        } else {
+            var newRow = row + dy
+            if newRow < 0 { newRow = rows - 1 }
+            if newRow >= rows { newRow = 0 }
+            var next = newRow * cols + col
+            if next >= count {
+                next = count - 1
+            }
+            index = next
         }
         hud.select(index)
     }

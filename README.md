@@ -2,16 +2,18 @@
 
 Tiny native macOS window switcher. **Option+Tab** lists every window, not every app, so two Chrome profiles show up as two entries.
 
-No Electron, no Swift packages, no Pro tier. Swift and AppKit only.
+No Electron, no Swift packages, no screen recording, no Pro tier. Swift and AppKit only.
 
 ```
 ⌥ Tab
 
-  [ Chrome preview ]  [ Chrome preview ]  [ VS Code ]  [ Terminal ]
-      Gmail               GitHub            opttab         zsh
+  [ Chrome ] [ Chrome ] [ VS Code ]
+    Gmail      GitHub     opttab
+  [ Terminal ] [ Finder ]
+     zsh        Documents
 ```
 
-Release Option to focus the selected window. That is the whole point: macOS `⌘ Tab` still switches apps; OptTab switches windows.
+Release Option to focus the selected window. macOS `⌘ Tab` still switches apps; OptTab switches windows.
 
 ## Why
 
@@ -31,15 +33,9 @@ cd opttab
 
 That builds `OptTab.app`, copies it to `/Applications`, and launches it.
 
-Grant these when asked (System Settings → Privacy & Security):
+If a yellow line appears in the overlay, click it to open **System Settings → Privacy & Security → Accessibility** and enable OptTab. OptTab does not keep asking with system popups.
 
-- **Accessibility** — list and focus other apps' windows
-- **Input Monitoring** — see Option+Tab while another app is focused
-- **Screen Recording** — live window previews in the switcher
-
-After granting, use the menu bar icon → **Show Switcher** to confirm the overlay, then press **Option+Tab**.
-
-Optional: click the menu bar icon → Launch at Login.
+Optional: menu bar icon → Launch at Login.
 
 ## Use
 
@@ -47,18 +43,19 @@ Optional: click the menu bar icon → Launch at Login.
 | --- | --- |
 | `⌥ Tab` | Open switcher / next window |
 | `⌥ ⇧ Tab` | Previous window |
-| arrows | Move selection |
+| arrows | Move in the grid |
+| click | Focus that window |
 | release `⌥` | Focus selected window |
 | `esc` | Cancel |
 
 ## Scope
 
 - Visible windows on the current space
-- Horizontal Windows-style switcher with live previews
+- Square grid of app icon + title, no live previews
 - Focus that window, not merely its app
 - Skips Finder Desktop, menu-bar extras, and itself
 
-No tiling WM, no `⌘ Tab` replacement.
+No tiling WM, no `⌘ Tab` replacement, no Screen Recording.
 
 ## Build without installing
 
