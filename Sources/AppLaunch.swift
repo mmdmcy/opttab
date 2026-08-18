@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 enum AppLaunch {
     struct Profile {
@@ -27,10 +28,43 @@ enum AppLaunch {
         }
     }
 
+    private static var launched: [Process] = []
+
+    static func openApp(bundleURL: URL?, bundleID: String, reopenWindow: Bool = false) {
+        if bundleID == "com.apple.finder" || bundleID == "com.apple.Finder" {
+            newWindow(bundleURL: bundleURL, bundleID: bundleID)
+            return
+        }
+        let url = bundleURL ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        if !bundleID.isEmpty,
+           let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first {
+            running.unhide()
+            let sel = NSSelectorFromString("activateWithOptions:")
+            if running.responds(to: sel) {
+                _ = running.perform(sel, with: NSNumber(value: 1 << 1))
+            }
+            PrivateCalls.makeFront(pid: running.processIdentifier)
+            let app = AXUIElementCreateApplication(running.processIdentifier)
+            AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+            if reopenWindow {
+                newWindow(bundleURL: url, bundleID: bundleID)
+            }
+            return
+        }
+        guard let url else { return }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.openApplication(at: url, configuration: config)
+    }
+
     static func newWindow(bundleURL: URL?, bundleID: String) {
         guard let bundleURL else { return }
         if userData(bundleID) != nil {
             open(bundleURL, args: ["--new-window"])
+            return
+        }
+        if bundleID == "com.apple.Finder" || bundleID == "com.apple.finder" {
+            NSAppleScript(source: "tell application \"Finder\" to make new Finder window")?.executeAndReturnError(nil)
             return
         }
         if bundleID == "com.apple.Safari" {
@@ -41,7 +75,11 @@ enum AppLaunch {
             open(bundleURL, args: ["-new-window"])
             return
         }
-        NSWorkspace.shared.openApplication(at: bundleURL, configuration: NSWorkspace.OpenConfiguration())
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: {
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            return config
+        }())
     }
 
     static func openProfile(bundleURL: URL?, directory: String) {
@@ -82,6 +120,12 @@ enum AppLaunch {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         proc.arguments = ["-na", bundleURL.path, "--args"] + args
+        proc.terminationHandler = { finished in
+            DispatchQueue.main.async {
+                launched.removeAll { $0 === finished }
+            }
+        }
+        launched.append(proc)
         try? proc.run()
     }
 }

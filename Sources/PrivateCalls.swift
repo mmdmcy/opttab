@@ -12,17 +12,70 @@ enum PrivateCalls {
         return fn(element, &id) == .success && id != 0 ? id : nil
     }
 
-    static func focusWindow(pid: pid_t, windowID: CGWindowID) {
+    static func focusWindow(pid: pid_t, windowID: CGWindowID, previousWindowID: CGWindowID? = nil) {
+        guard windowID != 0 else {
+            makeFront(pid: pid)
+            return
+        }
+        guard let getPSN = getProcessForPID, let setFront = slpsSetFront else {
+            NSLog("OptTab: SkyLight symbols missing")
+            return
+        }
+        var psn = ProcessSerialNumber(highLongOfPSN: 0, lowLongOfPSN: 0)
+        let status = getPSN(pid, &psn)
+        guard status == 0 else {
+            NSLog("OptTab: GetProcessForPID failed pid=%d status=%d", pid, status)
+            return
+        }
+        if let previousWindowID, previousWindowID != 0, previousWindowID != windowID {
+            postSpecial(&psn, windowID: previousWindowID, kind: 0x0D, marker: 0x02)
+        }
+        _ = setFront(&psn, windowID, userGenerated)
+        makeKey(&psn, windowID)
+        orderFront(windowID)
+        if let previousWindowID, previousWindowID != 0, previousWindowID != windowID {
+            postSpecial(&psn, windowID: windowID, kind: 0x0D, marker: 0x01)
+            _ = setFront(&psn, windowID, userGenerated)
+            makeKey(&psn, windowID)
+            orderFront(windowID)
+        }
+    }
+
+    static func makeFront(pid: pid_t) {
         guard let getPSN = getProcessForPID, let setFront = slpsSetFront else { return }
         var psn = ProcessSerialNumber(highLongOfPSN: 0, lowLongOfPSN: 0)
         guard getPSN(pid, &psn) == 0 else { return }
-        _ = setFront(&psn, windowID, userGenerated)
-        makeKey(&psn, windowID)
+        _ = setFront(&psn, 0, userGenerated)
+    }
+
+    static func orderFront(_ windowID: CGWindowID) {
+        guard windowID != 0, let connection = slsMainConnection?(), let order = slsOrderWindow else { return }
+        _ = order(connection, windowID, 1, 0)
     }
 
     private static func makeKey(_ psn: inout ProcessSerialNumber, _ windowID: CGWindowID) {
         guard let post = slpsPost else { return }
-        var bytes = [UInt8](repeating: 0, count: 0xF8)
+        var bytes = eventBytes(windowID: windowID)
+        bytes[0x08] = 0x01
+        postEvent(&psn, &bytes)
+        bytes[0x08] = 0x02
+        postEvent(&psn, &bytes)
+    }
+
+    private static func postSpecial(
+        _ psn: inout ProcessSerialNumber,
+        windowID: CGWindowID,
+        kind: UInt8,
+        marker: UInt8
+    ) {
+        var bytes = eventBytes(windowID: windowID)
+        bytes[0x08] = kind
+        bytes[0x8A] = marker
+        postEvent(&psn, &bytes)
+    }
+
+    private static func eventBytes(windowID: CGWindowID) -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: 0x100)
         bytes[0x04] = 0xF8
         bytes[0x3A] = 0x10
         var id = windowID
@@ -31,16 +84,17 @@ enum PrivateCalls {
                 bytes[0x3C + offset] = byte
             }
         }
-        for i in 0x20..<0x30 {
-            bytes[i] = 0xFF
-        }
-        bytes[0x08] = 0x01
-        bytes.withUnsafeMutableBufferPointer { buffer in
-            if let ptr = buffer.baseAddress {
-                _ = post(&psn, ptr)
+        var point = CGPoint(x: 300_000, y: 300_000)
+        withUnsafeBytes(of: &point) { raw in
+            for (offset, byte) in raw.enumerated() {
+                bytes[0x20 + offset] = byte
             }
         }
-        bytes[0x08] = 0x02
+        return bytes
+    }
+
+    private static func postEvent(_ psn: inout ProcessSerialNumber, _ bytes: inout [UInt8]) {
+        guard let post = slpsPost else { return }
         bytes.withUnsafeMutableBufferPointer { buffer in
             if let ptr = buffer.baseAddress {
                 _ = post(&psn, ptr)
@@ -82,6 +136,22 @@ enum PrivateCalls {
         symbol(
             "SLPSPostEventRecordTo",
             as: (@convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, UnsafeMutablePointer<UInt8>) -> Int32).self,
+            in: ["/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight"]
+        )
+    }()
+
+    private static let slsMainConnection: (@convention(c) () -> Int32)? = {
+        symbol(
+            "SLSMainConnectionID",
+            as: (@convention(c) () -> Int32).self,
+            in: ["/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight"]
+        )
+    }()
+
+    private static let slsOrderWindow: (@convention(c) (Int32, CGWindowID, Int32, CGWindowID) -> Int32)? = {
+        symbol(
+            "SLSOrderWindow",
+            as: (@convention(c) (Int32, CGWindowID, Int32, CGWindowID) -> Int32).self,
             in: ["/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight"]
         )
     }()

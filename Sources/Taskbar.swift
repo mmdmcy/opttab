@@ -30,6 +30,7 @@ final class Taskbar: NSObject {
     private var groupOrder: [String] = []
     private var windowOrder: [String: [CGWindowID]] = [:]
     private(set) var isVisible = false
+    var hostWindow: NSPanel? { panel }
 
     func start() {
         guard !isVisible else { return }
@@ -52,6 +53,7 @@ final class Taskbar: NSObject {
         timer?.invalidate()
         timer = nil
         hidePeek()
+        AppsLauncher.shared.hide()
         panel?.orderOut(nil)
         DockControl.restore()
         NotificationCenter.default.removeObserver(self)
@@ -70,6 +72,7 @@ final class Taskbar: NSObject {
         if screenID != lastScreenID {
             lastScreenID = screenID
             hidePeek()
+            AppsLauncher.shared.hide()
         }
         panel.setFrame(next, display: true)
     }
@@ -139,9 +142,9 @@ final class Taskbar: NSObject {
         }
 
         let windows = WindowCatalog.list()
-        let groups = grouped(windows)
+        let groups = displayGroups(from: grouped(windows))
         let activeID = WindowCatalog.frontWindowID()
-        let groupSignature = groups.map { group in
+        let groupSignature = PinnedApps.ids.joined(separator: ",") + "|" + groups.map { group in
             group.key + ":" + group.windows.map { "\($0.windowID)" }.joined(separator: ",")
         }.joined(separator: "|")
         let signature = groupSignature + ":\(activeID ?? 0)"
@@ -204,6 +207,34 @@ final class Taskbar: NSObject {
         return groupOrder.compactMap { map[$0] }
     }
 
+    private func displayGroups(from running: [AppGroup]) -> [AppGroup] {
+        let map = Dictionary(uniqueKeysWithValues: running.map { ($0.key, $0) })
+        var result: [AppGroup] = [
+            PinnedApps.finder(windows: map[PinnedApps.finderID]?.windows ?? []),
+            PinnedApps.apps(),
+        ]
+        var used: Set<String> = [PinnedApps.finderID, PinnedApps.appsID]
+        for id in PinnedApps.ids where !used.contains(id) {
+            if let live = map[id] {
+                result.append(live)
+            } else if let stub = PinnedApps.stub(bundleID: id) {
+                result.append(stub)
+            }
+            used.insert(id)
+        }
+        for group in running where !used.contains(group.key) {
+            result.append(group)
+        }
+        return result
+    }
+
+    func reload() {
+        guard isVisible else { return }
+        lastSignature = ""
+        lastGroupSignature = ""
+        refresh(force: true)
+    }
+
     private func rebuild(groups: [AppGroup], activeID: CGWindowID?) {
         guard let stack else { return }
         let peekKey = peek?.groupKey
@@ -217,8 +248,9 @@ final class Taskbar: NSObject {
         for group in groups {
             let button = TaskbarButton(group: group, width: buttonWidth)
             button.active = group.windows.contains { $0.windowID == activeID }
-            button.onClick = { [weak self] in
-                self?.clicked(group)
+            button.onClick = { [weak self, weak button] in
+                guard let self, let button else { return }
+                self.clicked(group, from: button)
             }
             button.onHover = { [weak self] hovering in
                 self?.hovered(group, hovering: hovering, from: button)
@@ -233,17 +265,27 @@ final class Taskbar: NSObject {
         }
     }
 
-    private func clicked(_ group: AppGroup) {
+    private func clicked(_ group: AppGroup, from button: TaskbarButton) {
         hidePeekTimer?.invalidate()
+        if group.bundleID == PinnedApps.appsID {
+            hidePeek()
+            if let panel {
+                AppsLauncher.shared.toggle(from: button, taskbar: panel)
+            }
+            return
+        }
+        AppsLauncher.shared.hide()
+        if group.windows.isEmpty {
+            AppLaunch.openApp(bundleURL: group.bundleURL, bundleID: group.bundleID, reopenWindow: true)
+            return
+        }
         if group.windows.count == 1, let window = group.windows.first {
             hidePeek()
             WindowCatalog.toggle(window)
             return
         }
         peekPinned = true
-        if let button = stack?.arrangedSubviews.compactMap({ $0 as? TaskbarButton }).first(where: { $0.groupKey == group.key }) {
-            showPeek(group, from: button)
-        }
+        showPeek(group, from: button)
     }
 
     private func hovered(_ group: AppGroup, hovering: Bool, from button: TaskbarButton) {
@@ -458,7 +500,9 @@ private final class TaskbarButton: NSView {
         ])
 
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
-        menu = makeMenu()
+        if group.bundleID != PinnedApps.appsID {
+            menu = makeMenu()
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -471,19 +515,22 @@ private final class TaskbarButton: NSView {
             item.representedObject = NSNumber(value: window.windowID)
             menu.addItem(item)
         }
-        menu.addItem(.separator())
+        if !group.windows.isEmpty {
+            menu.addItem(.separator())
+            let minimize = NSMenuItem(
+                title: group.windows.count > 1 ? "Minimize windows" : "Minimize",
+                action: #selector(minimizeWindows),
+                keyEquivalent: ""
+            )
+            minimize.target = self
+            menu.addItem(minimize)
+        }
 
-        let minimize = NSMenuItem(
-            title: group.windows.count > 1 ? "Minimize windows" : "Minimize",
-            action: #selector(minimizeWindows),
-            keyEquivalent: ""
-        )
-        minimize.target = self
-        menu.addItem(minimize)
-
-        let newWindow = NSMenuItem(title: "New Window", action: #selector(newWindow), keyEquivalent: "")
-        newWindow.target = self
-        menu.addItem(newWindow)
+        if group.bundleID != PinnedApps.appsID {
+            let newWindow = NSMenuItem(title: "New Window", action: #selector(newWindow), keyEquivalent: "")
+            newWindow.target = self
+            menu.addItem(newWindow)
+        }
 
         let profiles = AppLaunch.profiles(bundleID: group.bundleID)
         if !profiles.isEmpty {
@@ -499,18 +546,42 @@ private final class TaskbarButton: NSView {
             menu.addItem(profilesItem)
         }
 
-        menu.addItem(.separator())
-        let closeAll = NSMenuItem(
-            title: group.windows.count > 1 ? "Close windows" : "Close window",
-            action: #selector(closeWindows),
-            keyEquivalent: ""
-        )
-        closeAll.target = self
-        menu.addItem(closeAll)
-        let quit = NSMenuItem(title: "Quit \(group.name)", action: #selector(quitApp), keyEquivalent: "")
-        quit.target = self
-        menu.addItem(quit)
+        if PinnedApps.canChange(group.bundleID) {
+            menu.addItem(.separator())
+            let pin = NSMenuItem(
+                title: PinnedApps.ids.contains(group.bundleID) ? "Unpin from taskbar" : "Pin to taskbar",
+                action: #selector(togglePin),
+                keyEquivalent: ""
+            )
+            pin.target = self
+            menu.addItem(pin)
+        }
+
+        if !group.windows.isEmpty {
+            menu.addItem(.separator())
+            let closeAll = NSMenuItem(
+                title: group.windows.count > 1 ? "Close windows" : "Close window",
+                action: #selector(closeWindows),
+                keyEquivalent: ""
+            )
+            closeAll.target = self
+            menu.addItem(closeAll)
+        }
+        if group.pid != 0, group.bundleID != PinnedApps.finderID {
+            let quit = NSMenuItem(title: "Quit \(group.name)", action: #selector(quitApp), keyEquivalent: "")
+            quit.target = self
+            menu.addItem(quit)
+        }
         return menu
+    }
+
+    @objc private func togglePin() {
+        if PinnedApps.ids.contains(group.bundleID) {
+            PinnedApps.unpin(group.bundleID)
+        } else {
+            PinnedApps.pin(group.bundleID)
+        }
+        Taskbar.shared.reload()
     }
 
     @objc private func focusWindow(_ sender: NSMenuItem) {
@@ -559,6 +630,9 @@ private final class TaskbarButton: NSView {
         NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
         if active {
             NSColor.controlAccentColor.setFill()
+            NSBezierPath(rect: NSRect(x: 8, y: 1, width: bounds.width - 16, height: 2)).fill()
+        } else if PinnedApps.ids.contains(group.bundleID) || group.bundleID == PinnedApps.finderID || group.bundleID == PinnedApps.appsID {
+            NSColor.white.withAlphaComponent(0.22).setFill()
             NSBezierPath(rect: NSRect(x: 8, y: 1, width: bounds.width - 16, height: 2)).fill()
         }
     }
@@ -617,8 +691,8 @@ private final class PeekPanel: NSObject {
         cards.removeAll()
         cardList.removeAll()
 
-        let host = taskbar.screen?.frame
-            ?? NSScreen.screens.first { $0.frame.intersects(taskbar.frame) }?.frame
+        let host = NSScreen.screens.first { $0.frame.intersects(taskbar.frame) }?.frame
+            ?? taskbar.screen?.frame
             ?? taskbar.frame
         let count = max(group.windows.count, 1)
         var thumbW: CGFloat = count > 4 ? 148 : 184
@@ -651,14 +725,19 @@ private final class PeekPanel: NSObject {
             cardList.append(card)
         }
 
-        place(panel, from: button, taskbar: taskbar, in: host, size: NSSize(width: width, height: height))
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 8),
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 8),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -8),
         ])
+        place(panel, from: button, taskbar: taskbar, in: host, size: NSSize(width: width, height: height))
+        if panel.parent !== taskbar {
+            panel.parent?.removeChildWindow(panel)
+            taskbar.addChildWindow(panel, ordered: .above)
+        }
         panel.orderFrontRegardless()
+        taskbar.orderFrontRegardless()
 
         Previews.capture(group.windows.map(\.windowID), maxPixel: thumbW * 2) { [weak self] images in
             guard let self, self.token == current, self.groupKey == group.key else { return }
@@ -673,7 +752,10 @@ private final class PeekPanel: NSObject {
         groupKey = ""
         cards.removeAll()
         cardList.removeAll()
-        panel?.orderOut(nil)
+        if let panel {
+            panel.parent?.removeChildWindow(panel)
+            panel.orderOut(nil)
+        }
     }
 
     func hit(atScreen point: NSPoint) -> PeekHit? {

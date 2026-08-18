@@ -12,7 +12,7 @@ No Electron, no Swift packages, no Pro tier. Swift and AppKit only.
   [ Terminal ] [ Finder ]
      zsh        Documents
 
-[ Brave 2 ] [ VS Code ] [ Terminal ] [ Finder ]                14:41
+[ Finder ] [ Apps ] [ Brave 2 ] [ VS Code ] [ Terminal ]          14:41
 ```
 
 Click a tile while Option+Tab is open, or release Option, to focus that window. The cursor moves to that window, including across monitors. macOS `⌘ Tab` still switches apps; OptTab switches windows.
@@ -52,7 +52,7 @@ Optional: menu bar icon → Launch at Login.
 | release `⌥` | Focus selected window |
 | click a taskbar icon | Focus that window, or minimize if it is already front |
 | hover a grouped icon | Pick which window to raise |
-| right-click taskbar icon | New Window, Profiles, Close, Quit |
+| right-click taskbar icon | Pin, New Window, Profiles, Close, Quit |
 
 ## Scope
 
@@ -60,6 +60,7 @@ Optional: menu bar icon → Launch at Login.
 - Square grid switcher plus a grouped bottom taskbar
 - Live window thumbnails (Screen Recording)
 - Focus that window, not merely its app, and move the cursor there
+- Finder and Apps stay on the left; right-click other apps to pin them
 - Brave / Chrome / Edge profiles from the right-click menu
 - Skips Finder Desktop, menu-bar extras, and itself
 

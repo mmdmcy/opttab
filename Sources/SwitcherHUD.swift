@@ -23,6 +23,13 @@ final class SwitcherHUD {
         layout(on: panel, metrics: metrics)
         select(selected)
         panel.alphaValue = 1
+        if let host = Taskbar.shared.hostWindow {
+            if panel.parent !== host {
+                panel.parent?.removeChildWindow(panel)
+                host.addChildWindow(panel, ordered: .above)
+            }
+            host.orderFrontRegardless()
+        }
         panel.orderFrontRegardless()
         installClickMonitor()
         loadPreviews(entries)
@@ -31,7 +38,10 @@ final class SwitcherHUD {
 
     func hide() {
         removeClickMonitor()
-        panel?.orderOut(nil)
+        if let panel {
+            panel.parent?.removeChildWindow(panel)
+            panel.orderOut(nil)
+        }
     }
 
     func select(_ index: Int) {

@@ -125,7 +125,7 @@ enum WindowCatalog {
     }
 
     static func focus(_ entry: WindowEntry) {
-        let ax = resolve(entry)
+        var ax = resolve(entry)
 
         if let ax {
             AXUIElementSetAttributeValue(ax, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
@@ -135,8 +135,12 @@ enum WindowCatalog {
             app.unhide()
         }
 
-        PrivateCalls.focusWindow(pid: entry.pid, windowID: entry.windowID)
-        raise(ax, pid: entry.pid)
+        let alreadyFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == entry.pid
+        let previous = alreadyFront ? frontWindowID() : nil
+
+        PrivateCalls.focusWindow(pid: entry.pid, windowID: entry.windowID, previousWindowID: previous)
+        raise(ax, pid: entry.pid, windowID: entry.windowID)
+        moveCursor(into: entry.quartzBounds)
 
         if let app = NSRunningApplication(processIdentifier: entry.pid) {
             NSApp.yieldActivation(to: app)
@@ -144,18 +148,30 @@ enum WindowCatalog {
         }
 
         PrivateCalls.focusWindow(pid: entry.pid, windowID: entry.windowID)
-        raise(ax, pid: entry.pid)
+        raise(resolve(entry), pid: entry.pid, windowID: entry.windowID)
         moveCursor(into: entry.quartzBounds)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
             PrivateCalls.focusWindow(pid: entry.pid, windowID: entry.windowID)
-            raise(resolve(entry), pid: entry.pid)
+            raise(resolve(entry), pid: entry.pid, windowID: entry.windowID)
             moveCursor(into: entry.quartzBounds)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
             PrivateCalls.focusWindow(pid: entry.pid, windowID: entry.windowID)
-            raise(resolve(entry), pid: entry.pid)
+            raise(resolve(entry), pid: entry.pid, windowID: entry.windowID)
         }
+    }
+
+    private static func raise(_ ax: AXUIElement?, pid: pid_t, windowID: CGWindowID) {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        PrivateCalls.orderFront(windowID)
+        guard let ax else { return }
+        AXUIElementPerformAction(ax, kAXRaiseAction as CFString)
+        AXUIElementSetAttributeValue(ax, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(ax, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(app, kAXFocusedWindowAttribute as CFString, ax)
+        AXUIElementSetAttributeValue(app, kAXMainWindowAttribute as CFString, ax)
     }
 
     private static func moveCursor(into quartz: CGRect) {
@@ -217,17 +233,6 @@ enum WindowCatalog {
             return match
         }
         return matchAX(windows, windowID: entry.windowID, quartz: entry.quartzBounds) ?? entry.axWindow
-    }
-
-    private static func raise(_ ax: AXUIElement?, pid: pid_t) {
-        guard let ax else { return }
-        AXUIElementPerformAction(ax, kAXRaiseAction as CFString)
-        AXUIElementSetAttributeValue(ax, kAXMainAttribute as CFString, kCFBooleanTrue)
-        AXUIElementSetAttributeValue(ax, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-        let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetAttributeValue(app, kAXFocusedWindowAttribute as CFString, ax)
-        AXUIElementSetAttributeValue(app, kAXMainWindowAttribute as CFString, ax)
-        AXUIElementPerformAction(ax, kAXRaiseAction as CFString)
     }
 
     private static func axWindows(pid: pid_t) -> [AXUIElement] {
