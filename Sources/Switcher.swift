@@ -195,13 +195,11 @@ final class Switcher {
             }
             let target = entries[index]
             NSLog(
-                "OptTab: selected index=%d/%d front=%u window=%u app=%@ title=%@",
+                "OptTab: selected index=%d/%d front=%u window=%u",
                 index,
                 entries.count,
                 frontID ?? 0,
-                target.windowID,
-                target.appName,
-                target.title
+                target.windowID
             )
             showing = true
             hud.show(entries: entries, selected: index)

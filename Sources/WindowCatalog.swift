@@ -46,6 +46,7 @@ enum WindowCatalog {
             return []
         }
 
+        let axTrusted = AXIsProcessTrusted()
         var axCache: [pid_t: [AXUIElement]] = [:]
         var seen = Set<CGWindowID>()
         var result: [WindowEntry] = []
@@ -61,12 +62,23 @@ enum WindowCatalog {
             if let bundle = app.bundleIdentifier, bundle.hasPrefix("com.apple.controlcenter") {
                 return
             }
-            let axList = AXIsProcessTrusted() ? (axCache[pid] ?? {
+            let axList = axTrusted ? (axCache[pid] ?? {
                 let list = axWindows(pid: pid)
                 axCache[pid] = list
                 return list
             }()) : []
-            let ax = axHint ?? matchAX(axList, windowID: windowID, quartz: quartz)
+            let ax = axHint ?? matchAX(
+                axList,
+                windowID: windowID,
+                quartz: quartz,
+                preferredTitle: cgTitle
+            )
+            // CGWindowList can retain an app's old surface after its last
+            // document window was closed. When Accessibility is available,
+            // only accept a CG window that still has a matching AX window.
+            if axTrusted, ax == nil {
+                return
+            }
             if owner == "Finder", isDesktop(title: pickTitle(axTitle: ax.flatMap(title(of:)) ?? "", cgTitle: cgTitle, appName: owner), bounds: quartz) {
                 return
             }
@@ -109,7 +121,7 @@ enum WindowCatalog {
             append(pid: pid, windowID: windowID, owner: owner, quartz: quartz, cgTitle: cgTitle)
         }
 
-        if AXIsProcessTrusted() {
+        if axTrusted {
             for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular && app.processIdentifier != ourPID {
                 let pid = app.processIdentifier
                 let axList = axCache[pid] ?? {
@@ -146,10 +158,9 @@ enum WindowCatalog {
         let previousWindowID = wasFrontmost ? frontWindowID() : nil
         let initialAX = resolve(entry)
         NSLog(
-            "OptTab: focus window=%u pid=%d app=%@ ax=%d",
+            "OptTab: focus window=%u pid=%d ax=%d",
             entry.windowID,
             entry.pid,
-            entry.appName,
             initialAX == nil ? 0 : 1
         )
 
