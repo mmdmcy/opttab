@@ -28,6 +28,7 @@ xcrun swiftc \
     -framework Carbon \
     -framework ServiceManagement \
     -o "$macos/OptTab" \
+    "$root/Sources/FeatureSettings.swift" \
     "$root/Sources/Hotkeys.swift" \
     "$root/Sources/LoginItem.swift" \
     "$root/Sources/PrivateCalls.swift" \

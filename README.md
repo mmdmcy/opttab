@@ -39,6 +39,14 @@ The switcher needs Accessibility to inspect and focus individual windows. Screen
 
 Optional: menu bar icon → Launch at Login.
 
+## Components
+
+- **OptTab Switcher** — the implemented Option+Tab component; toggle it from the menu bar under **Components**.
+- **Taskbar** — separate, inactive, and not included in the Alt-Tab binary.
+- **Window Manager** — a separate future component; inactive until implemented.
+
+Disabling the switcher stops its hotkeys but keeps the app, permissions, and component boundaries in place for future development.
+
 ## Use
 
 | Key | Action |
@@ -49,7 +57,7 @@ Optional: menu bar icon → Launch at Login.
 | click a tile | Focus that window |
 | release `⌥` | Focus selected window |
 
-The taskbar is intentionally not enabled in this build.
+The taskbar is intentionally not enabled in this build. The window manager is also inactive.
 
 ## Scope
 

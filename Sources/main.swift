@@ -28,11 +28,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
-        // The switcher is the only active feature in this target. The old
-        // taskbar implementation is intentionally not started or consulted.
+        // Components are independent. The switcher is the only implemented
+        // component in this build; the taskbar and window manager stay
+        // dormant until their own modules are ready.
         Switcher.shared.prepare()
         setupStatusItem()
-        Hotkeys.shared.start()
+        if FeatureSettings.switcherEnabled {
+            Hotkeys.shared.start()
+        }
         NSAppleEventManager.shared().setEventHandler(
             self,
             andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
@@ -42,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
+        guard FeatureSettings.switcherEnabled else { return }
         for url in urls where url.scheme == "opttab" {
             if url.host == "show" {
                 Switcher.shared.showFromMenu()
@@ -51,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
         let string = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue ?? ""
-        if string.contains("show") {
+        if FeatureSettings.switcherEnabled, string.contains("show") {
             Switcher.shared.showFromMenu()
         }
     }
@@ -81,8 +85,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let show = NSMenuItem(title: "Show Switcher", action: #selector(showSwitcher), keyEquivalent: "")
         show.target = self
+        show.isEnabled = FeatureSettings.switcherEnabled
         menu.addItem(show)
 
+        let components = NSMenuItem(title: "Components", action: nil, keyEquivalent: "")
+        let componentMenu = NSMenu()
+
+        let switcher = NSMenuItem(title: "OptTab Switcher", action: #selector(toggleSwitcher), keyEquivalent: "")
+        switcher.target = self
+        switcher.state = FeatureSettings.switcherEnabled ? .on : .off
+        componentMenu.addItem(switcher)
+
+        let taskbar = NSMenuItem(title: "Taskbar (separate, inactive)", action: nil, keyEquivalent: "")
+        taskbar.isEnabled = false
+        componentMenu.addItem(taskbar)
+
+        let windowManager = NSMenuItem(title: "Window Manager (separate, inactive)", action: nil, keyEquivalent: "")
+        windowManager.isEnabled = false
+        componentMenu.addItem(windowManager)
+
+        components.submenu = componentMenu
+        menu.addItem(components)
         menu.addItem(.separator())
 
         if ax {
@@ -118,7 +141,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func showSwitcher() {
+        guard FeatureSettings.switcherEnabled else { return }
         Switcher.shared.showFromMenu()
+    }
+
+    @objc private func toggleSwitcher() {
+        FeatureSettings.switcherEnabled.toggle()
+        if FeatureSettings.switcherEnabled {
+            Switcher.shared.prepare()
+            Hotkeys.shared.start()
+        } else {
+            Switcher.shared.cancel()
+            Hotkeys.shared.stop()
+        }
+        if let menu = statusItem?.menu {
+            rebuildMenu(menu)
+        }
     }
 
     @objc func openAccessSettings() {
