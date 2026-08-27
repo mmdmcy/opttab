@@ -23,16 +23,10 @@ final class SwitcherHUD {
         layout(on: panel, metrics: metrics)
         select(selected)
         panel.alphaValue = 1
-        if let host = Taskbar.shared.hostWindow {
-            if panel.parent !== host {
-                panel.parent?.removeChildWindow(panel)
-                host.addChildWindow(panel, ordered: .above)
-            }
-            host.orderFrontRegardless()
-        }
+        // Keep the switcher as a standalone panel. The optional taskbar owns
+        // its own panels and must never become a prerequisite for Alt-Tab.
         panel.orderFrontRegardless()
         installClickMonitor()
-        loadPreviews(entries)
         return columns
     }
 
@@ -191,17 +185,6 @@ final class SwitcherHUD {
         return nil
     }
 
-    private func loadPreviews(_ entries: [WindowEntry]) {
-        let ids = entries.map(\.windowID)
-        Previews.capture(ids, maxPixel: 420) { [weak self] images in
-            guard let self, self.cards.count == ids.count else { return }
-            for (index, id) in ids.enumerated() {
-                if let image = images[id] {
-                    self.cards[index].setPreview(image)
-                }
-            }
-        }
-    }
 }
 
 private final class BackdropView: NSVisualEffectView {
@@ -311,16 +294,6 @@ private final class CardView: NSView {
     }
 
     required init?(coder: NSCoder) { nil }
-
-    func setPreview(_ image: NSImage) {
-        preview.image = image
-        preview.imageScaling = .scaleProportionallyUpOrDown
-        if let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-            preview.image = nil
-            preview.layer?.contents = cg
-            preview.layer?.contentsGravity = .resizeAspectFill
-        }
-    }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 

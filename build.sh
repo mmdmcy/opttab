@@ -16,6 +16,8 @@ if [ -f "$root/opttab.svg" ]; then
     cp "$root/opttab.svg" "$resources/opttab.svg"
 fi
 
+# Keep the unfinished taskbar sources out of the Alt-Tab binary. They remain
+# in Sources/ for a separate experiment instead of being started implicitly.
 xcrun swiftc \
     -O \
     -parse-as-library \
@@ -24,10 +26,15 @@ xcrun swiftc \
     -framework AppKit \
     -framework ApplicationServices \
     -framework Carbon \
-    -framework ScreenCaptureKit \
     -framework ServiceManagement \
     -o "$macos/OptTab" \
-    "$root"/Sources/*.swift
+    "$root/Sources/Hotkeys.swift" \
+    "$root/Sources/LoginItem.swift" \
+    "$root/Sources/PrivateCalls.swift" \
+    "$root/Sources/Switcher.swift" \
+    "$root/Sources/SwitcherHUD.swift" \
+    "$root/Sources/WindowCatalog.swift" \
+    "$root/Sources/main.swift"
 
 strip "$macos/OptTab"
 

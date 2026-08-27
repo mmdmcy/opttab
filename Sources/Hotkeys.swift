@@ -11,6 +11,7 @@ final class Hotkeys {
     private var monitors: [Any] = []
     private var tapPort: CFMachPort?
     private var tapSource: CFRunLoopSource?
+    private var tapIsEnabled = false
 
     func start() {
         stop()
@@ -43,12 +44,35 @@ final class Hotkeys {
         }
         tapPort = nil
         tapSource = nil
+        tapIsEnabled = false
     }
 
     func reenableTap() {
         if let tapPort {
             CGEvent.tapEnable(tap: tapPort, enable: true)
+            tapIsEnabled = true
         }
+    }
+
+    // Carbon is the fallback that makes Option-Tab work without Input
+    // Monitoring. While the event tap is active it owns the key event so the
+    // two paths cannot advance the selection twice.
+    func handleCarbonHotKey(_ id: UInt32) {
+        guard !tapIsEnabled else { return }
+        DispatchQueue.main.async {
+            switch id {
+            case 1:
+                Switcher.shared.handleTab(reverse: false, fromHotkey: true)
+            case 2:
+                Switcher.shared.handleTab(reverse: true, fromHotkey: true)
+            default:
+                break
+            }
+        }
+    }
+
+    private var hasGlobalTabHandler: Bool {
+        !carbonKeys.isEmpty || tapIsEnabled
     }
 
     private func installCarbon() {
@@ -85,13 +109,18 @@ final class Hotkeys {
 
     private func installMonitors() {
         let keys: NSEvent.EventTypeMask = [.keyDown, .flagsChanged]
-        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: keys, handler: { event in
+        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: keys, handler: { [weak self] event in
+            guard let self else { return }
+            // Carbon or the event tap already owns the global Tab shortcut.
+            if event.type == .keyDown, event.keyCode == 48, self.hasGlobalTabHandler { return }
             _ = Switcher.shared.handleNSEvent(event)
         }) {
             monitors.append(monitor)
         }
-        if let monitor = NSEvent.addLocalMonitorForEvents(matching: keys, handler: { event in
-            Switcher.shared.handleNSEvent(event) ? nil : event
+        if let monitor = NSEvent.addLocalMonitorForEvents(matching: keys, handler: { [weak self] event in
+            guard let self else { return event }
+            if event.type == .keyDown, event.keyCode == 48, self.hasGlobalTabHandler { return event }
+            return Switcher.shared.handleNSEvent(event) ? nil : event
         }) {
             monitors.append(monitor)
         }
@@ -122,6 +151,7 @@ final class Hotkeys {
         CGEvent.tapEnable(tap: tap, enable: true)
         tapPort = tap
         tapSource = source
+        tapIsEnabled = true
         NSLog("OptTab: event tap enabled")
     }
 }
@@ -148,16 +178,7 @@ private func optTabCarbonHandler(
         return OSStatus(eventNotHandledErr)
     }
 
-    DispatchQueue.main.async {
-        switch hotKeyID.id {
-        case 1:
-            Switcher.shared.handleTab(reverse: false, fromHotkey: true)
-        case 2:
-            Switcher.shared.handleTab(reverse: true, fromHotkey: true)
-        default:
-            break
-        }
-    }
+    Hotkeys.shared.handleCarbonHotKey(hotKeyID.id)
     return noErr
 }
 

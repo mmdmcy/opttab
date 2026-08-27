@@ -12,25 +12,26 @@ enum PrivateCalls {
         return fn(element, &id) == .success && id != 0 ? id : nil
     }
 
-    static func focusWindow(pid: pid_t, windowID: CGWindowID, previousWindowID: CGWindowID? = nil) {
+    @discardableResult
+    static func focusWindow(pid: pid_t, windowID: CGWindowID, previousWindowID: CGWindowID? = nil) -> Bool {
         guard windowID != 0 else {
             makeFront(pid: pid)
-            return
+            return false
         }
         guard let getPSN = getProcessForPID, let setFront = slpsSetFront else {
-            NSLog("OptTab: SkyLight symbols missing")
-            return
+            NSLog("OptTab: SkyLight window symbols missing; using Accessibility fallback")
+            return false
         }
         var psn = ProcessSerialNumber(highLongOfPSN: 0, lowLongOfPSN: 0)
         let status = getPSN(pid, &psn)
         guard status == 0 else {
             NSLog("OptTab: GetProcessForPID failed pid=%d status=%d", pid, status)
-            return
+            return false
         }
         if let previousWindowID, previousWindowID != 0, previousWindowID != windowID {
             postSpecial(&psn, windowID: previousWindowID, kind: 0x0D, marker: 0x02)
         }
-        _ = setFront(&psn, windowID, userGenerated)
+        let result = setFront(&psn, windowID, userGenerated)
         makeKey(&psn, windowID)
         orderFront(windowID)
         if let previousWindowID, previousWindowID != 0, previousWindowID != windowID {
@@ -39,6 +40,7 @@ enum PrivateCalls {
             makeKey(&psn, windowID)
             orderFront(windowID)
         }
+        return result == 0
     }
 
     static func makeFront(pid: pid_t) {
@@ -54,7 +56,7 @@ enum PrivateCalls {
     }
 
     private static func makeKey(_ psn: inout ProcessSerialNumber, _ windowID: CGWindowID) {
-        guard let post = slpsPost else { return }
+        guard slpsPost != nil else { return }
         var bytes = eventBytes(windowID: windowID)
         bytes[0x08] = 0x01
         postEvent(&psn, &bytes)
@@ -144,7 +146,10 @@ enum PrivateCalls {
         symbol(
             "SLSMainConnectionID",
             as: (@convention(c) () -> Int32).self,
-            in: ["/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight"]
+            in: [
+                "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",
+                "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight",
+            ]
         )
     }()
 
@@ -152,7 +157,10 @@ enum PrivateCalls {
         symbol(
             "SLSOrderWindow",
             as: (@convention(c) (Int32, CGWindowID, Int32, CGWindowID) -> Int32).self,
-            in: ["/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight"]
+            in: [
+                "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",
+                "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight",
+            ]
         )
     }()
 

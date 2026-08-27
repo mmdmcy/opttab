@@ -9,6 +9,7 @@ final class Switcher {
     private var index = 0
     private var showing = false
     private var waitForOptionRelease = false
+    private var optionReleaseTimer: Timer?
     private var lastFire: TimeInterval = 0
 
     func prepare() {
@@ -22,6 +23,8 @@ final class Switcher {
     var isShowing: Bool { showing }
 
     func showFromMenu() {
+        optionReleaseTimer?.invalidate()
+        optionReleaseTimer = nil
         waitForOptionRelease = false
         present(reverse: false, force: true)
     }
@@ -29,6 +32,9 @@ final class Switcher {
     func handleTab(reverse: Bool, fromHotkey: Bool) {
         waitForOptionRelease = fromHotkey || optionDown
         present(reverse: reverse, force: false)
+        if showing && waitForOptionRelease {
+            startOptionReleasePolling()
+        }
     }
 
     func cancel() {
@@ -84,7 +90,9 @@ final class Switcher {
             if flags.contains(.maskShift) { nsFlags.insert(.shift) }
             if flags.contains(.maskCommand) { nsFlags.insert(.command) }
             if flags.contains(.maskControl) { nsFlags.insert(.control) }
-            handleFlags(nsFlags)
+            dispatchMain { [weak self] in
+                self?.handleFlags(nsFlags)
+            }
             return false
         }
 
@@ -97,38 +105,61 @@ final class Switcher {
         let control = flags.contains(.maskControl)
 
         if showing, command || control {
-            cancel()
+            dispatchMain { [weak self] in
+                self?.cancel()
+            }
             return false
         }
 
         switch key {
         case 48 where option && !command && !control:
             if type == .keyDown {
-                handleTab(reverse: shift, fromHotkey: true)
+                dispatchMain { [weak self] in
+                    self?.handleTab(reverse: shift, fromHotkey: true)
+                }
             }
             return true
         case 53 where showing:
-            if type == .keyDown { cancel() }
+            if type == .keyDown {
+                dispatchMain { [weak self] in self?.cancel() }
+            }
             return true
         case 123 where showing:
-            if type == .keyDown { move(dx: -1, dy: 0) }
+            if type == .keyDown {
+                dispatchMain { [weak self] in self?.move(dx: -1, dy: 0) }
+            }
             return true
         case 124 where showing:
-            if type == .keyDown { move(dx: 1, dy: 0) }
+            if type == .keyDown {
+                dispatchMain { [weak self] in self?.move(dx: 1, dy: 0) }
+            }
             return true
         case 126 where showing:
-            if type == .keyDown { move(dx: 0, dy: -1) }
+            if type == .keyDown {
+                dispatchMain { [weak self] in self?.move(dx: 0, dy: -1) }
+            }
             return true
         case 125 where showing:
-            if type == .keyDown { move(dx: 0, dy: 1) }
+            if type == .keyDown {
+                dispatchMain { [weak self] in self?.move(dx: 0, dy: 1) }
+            }
             return true
         default:
             return false
         }
     }
 
+    private func dispatchMain(_ work: @escaping () -> Void) {
+        // CGEvent tap callbacks must return quickly or WindowServer disables
+        // the tap. Never build the catalog or touch AppKit in that callback.
+        DispatchQueue.main.async(execute: work)
+    }
+
     private var optionDown: Bool {
-        NSEvent.modifierFlags.contains(.option)
+        if NSEvent.modifierFlags.contains(.option) {
+            return true
+        }
+        return CGEventSource.flagsState(.combinedSessionState).contains(.maskAlternate)
     }
 
     private func handleFlags(_ flags: NSEvent.ModifierFlags) {
@@ -140,17 +171,38 @@ final class Switcher {
 
     private func present(reverse: Bool, force: Bool) {
         let now = ProcessInfo.processInfo.systemUptime
-        if !force, now - lastFire < 0.04 { return }
+        if !force, now - lastFire < 0.02 { return }
         lastFire = now
 
         if !showing {
+            let frontID = WindowCatalog.frontWindowID()
             entries = WindowCatalog.list()
             NSLog("OptTab: found %d windows", entries.count)
             guard !entries.isEmpty else {
                 NSSound.beep()
                 return
             }
-            index = entries.count > 1 ? 1 : 0
+
+            // CGWindowList is front-to-back. Select the next window relative
+            // to the actual front window rather than assuming it is entry 0;
+            // this also makes Shift-Option-Tab work on the first press.
+            if let frontIndex = entries.firstIndex(where: { $0.windowID == frontID }) {
+                index = reverse
+                    ? (frontIndex - 1 + entries.count) % entries.count
+                    : (frontIndex + 1) % entries.count
+            } else {
+                index = reverse ? entries.count - 1 : 0
+            }
+            let target = entries[index]
+            NSLog(
+                "OptTab: selected index=%d/%d front=%u window=%u app=%@ title=%@",
+                index,
+                entries.count,
+                frontID ?? 0,
+                target.windowID,
+                target.appName,
+                target.title
+            )
             showing = true
             hud.show(entries: entries, selected: index)
             return
@@ -168,7 +220,7 @@ final class Switcher {
     private func move(dx: Int, dy: Int) {
         guard showing, !entries.isEmpty else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        if now - lastFire < 0.04 { return }
+        if now - lastFire < 0.02 { return }
         lastFire = now
 
         let cols = max(hud.columns, 1)
@@ -195,6 +247,18 @@ final class Switcher {
         hud.select(index)
     }
 
+    private func startOptionReleasePolling() {
+        optionReleaseTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.025, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if self.showing, self.waitForOptionRelease, !self.optionDown {
+                self.commit()
+            }
+        }
+        optionReleaseTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
     private func commit() {
         guard showing else { return }
         let target = entries.indices.contains(index) ? entries[index] : nil
@@ -205,6 +269,8 @@ final class Switcher {
     }
 
     private func hide() {
+        optionReleaseTimer?.invalidate()
+        optionReleaseTimer = nil
         showing = false
         waitForOptionRelease = false
         entries = []

@@ -19,10 +19,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.mmdmcy.opttab"
+        if NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .contains(where: { $0.processIdentifier != currentPID }) {
+            NSLog("OptTab: another instance is already running")
+            NSApp.terminate(nil)
+            return
+        }
+
+        // The switcher is the only active feature in this target. The old
+        // taskbar implementation is intentionally not started or consulted.
         Switcher.shared.prepare()
         setupStatusItem()
         Hotkeys.shared.start()
-        Taskbar.shared.start()
         NSAppleEventManager.shared().setEventHandler(
             self,
             andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
@@ -48,7 +58,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         Hotkeys.shared.stop()
-        Taskbar.shared.stop()
     }
 
     private func setupStatusItem() {
@@ -74,11 +83,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         show.target = self
         menu.addItem(show)
 
-        let taskbar = NSMenuItem(title: "Bottom Taskbar", action: #selector(toggleTaskbar), keyEquivalent: "")
-        taskbar.target = self
-        taskbar.state = Taskbar.shared.isVisible ? .on : .off
-        menu.addItem(taskbar)
-
         menu.addItem(.separator())
 
         if ax {
@@ -92,12 +96,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(relaunch)
         }
 
-        if Previews.isTrusted {
-            menu.addItem(NSMenuItem(title: "Screen Recording: on", action: nil, keyEquivalent: ""))
-        } else {
-            let grant = NSMenuItem(title: "Open Screen Recording Settings", action: #selector(openScreenSettings), keyEquivalent: "")
-            grant.target = self
-            menu.addItem(grant)
+        if !CGPreflightListenEventAccess() {
+            let input = NSMenuItem(title: "Optional: Open Input Monitoring Settings", action: #selector(openInputSettings), keyEquivalent: "")
+            input.target = self
+            menu.addItem(input)
         }
 
         menu.addItem(.separator())
@@ -106,10 +108,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         login.target = self
         login.state = LoginItem.isEnabled ? .on : .off
         menu.addItem(login)
-
-        let restoreDock = NSMenuItem(title: "Restore macOS Dock", action: #selector(restoreDock), keyEquivalent: "")
-        restoreDock.target = self
-        menu.addItem(restoreDock)
 
         menu.addItem(.separator())
 
@@ -123,23 +121,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Switcher.shared.showFromMenu()
     }
 
-    @objc private func toggleTaskbar() {
-        if Taskbar.shared.isVisible {
-            Taskbar.shared.stop()
-        } else {
-            Taskbar.shared.start()
-        }
-    }
-
     @objc func openAccessSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
     }
 
-    @objc func openScreenSettings() {
-        Previews.prepare()
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+    @objc private func openInputSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
             NSWorkspace.shared.open(url)
         }
     }
@@ -151,10 +140,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         proc.arguments = ["-c", "sleep 0.4; /usr/bin/open -a '\(path)'"]
         try? proc.run()
         NSApp.terminate(nil)
-    }
-
-    @objc private func restoreDock() {
-        DockControl.restore()
     }
 
     @objc private func toggleLoginItem() {
